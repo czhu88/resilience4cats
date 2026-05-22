@@ -16,6 +16,8 @@ class DynamicGCRA[F[_]: Sync] private (state: Ref[F, State]) extends DynamicRate
 
   override def capacity: F[Int] = state.get.map(_.capacity)
 
+  override def refillRate: F[RefillRate] = state.get.map(_.configuredRefillRate)
+
   override def requests: F[Int] =
     for {
       now <- nowInNanos
@@ -58,27 +60,46 @@ class DynamicGCRA[F[_]: Sync] private (state: Ref[F, State]) extends DynamicRate
       _ <- Sync[F].raiseWhen(newCapacity < 1)(
         new IllegalArgumentException(s"capacity must be positive, got: $newCapacity") with NoStackTrace
       )
-      now <- nowInNanos
-      _   <- state.update { current =>
+      now   <- nowInNanos
+      error <- state.modify { current =>
         val emission = current.emissionPeriodNanos
-        Config.requireNoOverflow(emission, newCapacity.toLong, label = "emissionInterval * capacity")
-        val newTat = getTat(current.tat, now, newCapacity.toLong * emission)
-        State(capacity = newCapacity, emissionPeriodNanos = emission, tat = newTat)
+        Config.requireNoOverflow(emission, newCapacity.toLong, label = "emissionInterval * capacity") match {
+          case Left(error) => (current, error.some)
+          case Right(_)    =>
+            (
+              current.copy(
+                capacity = newCapacity,
+                tat = getTat(current.tat, now, newCapacity.toLong * emission)
+              ),
+              none[Throwable]
+            )
+        }
       }
+      _ <- Sync[F].fromEither(error.toLeft(()))
     } yield ()
 
-  override def setRefillRate(newRate: RefillRate): F[Unit] =
+  def setRefillRate(newRate: RefillRate): F[Unit] =
     for {
-      now <- nowInNanos
-      _   <- state.update { current =>
-        val newEmissionInterval =
-          Config(capacity = current.capacity, initialCapacity = 0, refillRate = newRate).validate
-            .fold(throw _, identity)
-        current.copy(
-          emissionPeriodNanos = newEmissionInterval,
-          tat = now - current.availableTokens(now) * newEmissionInterval
-        )
+      now   <- nowInNanos
+      error <- state.modify { current =>
+        Config(
+          capacity = current.capacity,
+          initialCapacity = 0,
+          refillRate = newRate
+        ).validate match {
+          case Left(error)                => (current, error.some)
+          case Right(newEmissionInterval) =>
+            (
+              current.copy(
+                emissionPeriodNanos = newEmissionInterval,
+                configuredRefillRate = newRate,
+                tat = now - current.availableTokens(now) * newEmissionInterval
+              ),
+              none[Throwable]
+            )
+        }
       }
+      _ <- Sync[F].fromEither(error.toLeft(()))
     } yield ()
 
   override def update(config: Config): F[Unit] =
@@ -89,7 +110,12 @@ class DynamicGCRA[F[_]: Sync] private (state: Ref[F, State]) extends DynamicRate
       _ <- state.update { current =>
         val tat    = now - current.availableTokens(now) * newEmission
         val newTat = getTat(tat, now, newCapacity.toLong * newEmission)
-        State(capacity = newCapacity, emissionPeriodNanos = newEmission, tat = newTat)
+        State(
+          capacity = newCapacity,
+          emissionPeriodNanos = newEmission,
+          configuredRefillRate = config.refillRate,
+          tat = newTat
+        )
       }
     } yield ()
 
@@ -105,6 +131,7 @@ object DynamicGCRA {
         State(
           capacity = config.capacity,
           emissionPeriodNanos = emissionIntervalNanos,
+          configuredRefillRate = config.refillRate,
           tat = now.toNanos - config.initialCapacity * emissionIntervalNanos
         )
       )
@@ -135,6 +162,7 @@ object DynamicGCRA {
   private final case class State(
       capacity: Int,
       emissionPeriodNanos: Long,
+      configuredRefillRate: RefillRate,
       tat: Long
   ) {
 

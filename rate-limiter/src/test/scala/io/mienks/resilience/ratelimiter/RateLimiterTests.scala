@@ -45,6 +45,14 @@ abstract class RateLimiterTests extends CatsEffectSuite {
     } yield assertEquals(cap, 7)
   }
 
+  test("refillRate() returns configured rate") {
+    val rate = RefillRate(2, 3.seconds)
+    for {
+      rl       <- buildFullRateLimiter(capacity = 7, rate)
+      observed <- rl.refillRate
+    } yield assertEquals(observed, rate)
+  }
+
   test("capacity=1: empty, rate = 1 token / 1 second") {
     TestControl.executeEmbed {
       for {

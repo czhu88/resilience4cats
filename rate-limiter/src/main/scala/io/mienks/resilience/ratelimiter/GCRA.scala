@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong
   */
 class GCRA[F[_]: Sync] private (
     private val requestCapacity: Int,
+    private val configuredRefillRate: RefillRate,
     private val emissionPeriodNanos: Long,
     private val tat: AtomicLong
 ) extends RateLimiter[F] {
@@ -39,6 +40,8 @@ class GCRA[F[_]: Sync] private (
     *   Max number of requests that can be made in a single burst
     */
   override def capacity: F[Int] = requestCapacity.pure[F]
+
+  override def refillRate: F[RefillRate] = configuredRefillRate.pure[F]
 
   /** @return
     *   Current number of requests available before being rate limited
@@ -145,6 +148,7 @@ object GCRA {
       gcra                  <- Sync[F].delay {
         new GCRA[F](
           requestCapacity = config.capacity,
+          configuredRefillRate = config.refillRate,
           emissionPeriodNanos = emissionIntervalNanos,
           tat = new AtomicLong(now.toNanos - config.initialCapacity * emissionIntervalNanos)
         )

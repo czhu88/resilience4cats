@@ -19,6 +19,11 @@ trait RateLimiter[F[_]] {
   def capacity: F[Int]
 
   /** @return
+    *   Configured refill rate for the limiter
+    */
+  def refillRate: F[RateLimiter.RefillRate]
+
+  /** @return
     *   Current number of requests available before being rate limited
     */
   def requests: F[Int]
@@ -85,6 +90,7 @@ object RateLimiter {
   final case class RefillRate(requests: Int, period: FiniteDuration) extends Ordered[RefillRate] {
     def emissionIntervalNanos: Long = period.toNanos / requests
 
+    // TODO: avoid throwables on validation, just strings
     def validate: Either[Throwable, Long] =
       for {
         _ <- Either.cond(
