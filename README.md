@@ -36,7 +36,7 @@ final case class RefillRate(requests: Int, period: FiniteDuration)
 ```
 
 For convenience, you can create a full rate limiter, with the initial capacity equal to the total capacity,
-or a empty rate limiter, with the initial capacity equal to 0.
+or an empty rate limiter, with the initial capacity equal to 0.
 
 ```scala
 def empty[F[_]: Sync](capacity: Int, rate: RefillRate): F[RateLimiter[F]]

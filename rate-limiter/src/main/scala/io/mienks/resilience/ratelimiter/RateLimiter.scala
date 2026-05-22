@@ -66,19 +66,19 @@ object RateLimiter {
 
   object Dynamic {
 
-    def apply[F[_]: Sync](config: Config): F[DynamicGCRA[F]] = DynamicGCRA(config)
+    def apply[F[_]: Sync](config: Config): F[DynamicRateLimiter[F]] = DynamicGCRA(config).widen
 
-    def apply[F[_]: Sync](capacity: Int, initialCapacity: Int, refillRate: RefillRate): F[DynamicGCRA[F]] =
-      DynamicGCRA(capacity, initialCapacity, refillRate)
+    def apply[F[_]: Sync](capacity: Int, initialCapacity: Int, refillRate: RefillRate): F[DynamicRateLimiter[F]] =
+      DynamicGCRA(capacity, initialCapacity, refillRate).widen
 
-    def empty[F[_]: Sync](capacity: Int, refillRate: RefillRate): F[DynamicGCRA[F]] =
-      DynamicGCRA.empty(capacity, refillRate)
+    def empty[F[_]: Sync](capacity: Int, refillRate: RefillRate): F[DynamicRateLimiter[F]] =
+      DynamicGCRA.empty(capacity, refillRate).widen
 
-    def full[F[_]: Sync](capacity: Int, refillRate: RefillRate): F[DynamicGCRA[F]] =
-      DynamicGCRA.full(capacity, refillRate)
+    def full[F[_]: Sync](capacity: Int, refillRate: RefillRate): F[DynamicRateLimiter[F]] =
+      DynamicGCRA.full(capacity, refillRate).widen
 
-    def gcra[F[_]: Sync](capacity: Int, initial: Int, refillRate: RefillRate): F[DynamicGCRA[F]] =
-      DynamicGCRA(capacity, initial, refillRate)
+    def gcra[F[_]: Sync](capacity: Int, initial: Int, refillRate: RefillRate): F[DynamicRateLimiter[F]] =
+      DynamicGCRA(capacity, initial, refillRate).widen
   }
 
   /** Rate of requests / period
