@@ -63,6 +63,21 @@ final class RefillRateTests extends FunSuite {
     assert((onePerSecond subtract RefillRate.Zero) === onePerSecond)
   }
 
+  test("validate accepts positive emission interval") {
+    assertEquals(RefillRate(1, 1.second).validate, Right(1.second.toNanos))
+    assertEquals(RefillRate(2, 1.second).validate, Right(500_000_000L))
+  }
+
+  test("validate rejects non-positive period and zero emission interval") {
+    assert(RefillRate(0, 1.second).validate.left.exists(_.isInstanceOf[IllegalArgumentException]))
+    assert(RefillRate(1, 0.seconds).validate.isLeft)
+    assert(RefillRate(1, (-1).second).validate.isLeft)
+    assert(RefillRate(2, 1.nanosecond).validate.isLeft)
+    assert(
+      RefillRate(2, 1.nanosecond).validate.left.exists(_.getMessage.contains("emission interval must be positive"))
+    )
+  }
+
   test("scaleBy: 1 unchanged; below 1 slows; above 1 speeds; zero and invalid factors") {
     val fivePerSecond = 5.per(1.second) // 1 / 200 ms
     assert(fivePerSecond.scaleBy(factor = 1.0) === fivePerSecond)
