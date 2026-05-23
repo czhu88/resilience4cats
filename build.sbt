@@ -40,8 +40,10 @@ lazy val core = project
   .settings(
     name := "core",
     libraryDependencies ++= Seq(
-      "org.typelevel" %% "cats-core"         % CatsCoreVersion,
-      "org.typelevel" %% "munit-cats-effect" % MunitCatsEffectVersion % Test
+      "org.typelevel" %% "cats-core"           % CatsCoreVersion,
+      "org.typelevel" %% "cats-effect"         % CatsEffectVersion,
+      "org.typelevel" %% "munit-cats-effect"   % MunitCatsEffectVersion % Test,
+      "org.typelevel" %% "cats-effect-testkit" % CatsEffectVersion      % Test
     ),
     testFrameworks += new TestFramework("munit.Framework")
   )
@@ -57,6 +59,7 @@ lazy val circuitBreaker = project
     ),
     testFrameworks += new TestFramework("munit.Framework")
   )
+  .dependsOn(core)
 
 lazy val benchmarks = project
   .in(file("benchmarks"))

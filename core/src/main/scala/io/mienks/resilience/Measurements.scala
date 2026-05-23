@@ -1,4 +1,4 @@
-package io.mienks.resilience.circuitbreaker
+package io.mienks.resilience
 
 import cats.effect.{Clock, Ref, Sync}
 import cats.kernel.Eq
@@ -73,7 +73,7 @@ object CountBasedSlidingWindowMeasurements {
       .of(State.empty(windowSize, minNumberOfCalls))
       .map(new CountBasedSlidingWindowMeasurements[F](_))
 
-  private[circuitbreaker] final case class State(
+  private[resilience] final case class State(
       failures: immutable.BitSet,
       index: Int,
       windowSize: Int,
@@ -105,7 +105,7 @@ object CountBasedSlidingWindowMeasurements {
     def reset: State = State.empty(windowSize, minNumberOfCalls)
   }
 
-  private[circuitbreaker] object State {
+  private[resilience] object State {
 
     def empty(windowSize: Int, minNumberOfCalls: Int): State = State(
       failures = immutable.BitSet.empty,
@@ -157,7 +157,7 @@ object TimeBasedSlidingWindowMeasurements {
       )
     } yield new TimeBasedSlidingWindowMeasurements[F](stateRef)
 
-  private[circuitbreaker] final case class TimeBucket(createdAt: Long, failures: Int, total: Int) {
+  private[resilience] final case class TimeBucket(createdAt: Long, failures: Int, total: Int) {
     def addMeasurement(isFailure: Boolean): TimeBucket =
       copy(failures = failures + (if (isFailure) 1 else 0), total = total + 1)
   }
@@ -166,7 +166,7 @@ object TimeBasedSlidingWindowMeasurements {
     def empty(createdAt: Long): TimeBucket = TimeBucket(createdAt, failures = 0, total = 0)
   }
 
-  private[circuitbreaker] final case class State(
+  private[resilience] final case class State(
       buckets: Vector[TimeBucket],
       index: Int,
       numberOfBuckets: Int,
@@ -217,7 +217,7 @@ object TimeBasedSlidingWindowMeasurements {
       State.initial(numberOfBuckets, bucketLengthInNanos, minNumberOfCalls, now)
   }
 
-  private[circuitbreaker] object State {
+  private[resilience] object State {
 
     def initial(
         numberOfBuckets: Int,

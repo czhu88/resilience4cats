@@ -1,4 +1,4 @@
-package io.mienks.resilience.circuitbreaker
+package io.mienks.resilience
 
 import cats.effect.IO
 import cats.effect.testkit.TestControl
