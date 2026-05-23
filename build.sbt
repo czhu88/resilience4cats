@@ -31,7 +31,6 @@ lazy val resilience4cats = project
   .dependsOn(core, circuitBreaker, rateLimiter)
   .aggregate(core, circuitBreaker, rateLimiter)
 
-val CatsCoreVersion        = "2.13.0"
 val CatsEffectVersion      = "3.6.3"
 val MunitCatsEffectVersion = "2.1.0"
 
@@ -40,7 +39,6 @@ lazy val core = project
   .settings(
     name := "core",
     libraryDependencies ++= Seq(
-      "org.typelevel" %% "cats-core"           % CatsCoreVersion,
       "org.typelevel" %% "cats-effect"         % CatsEffectVersion,
       "org.typelevel" %% "munit-cats-effect"   % MunitCatsEffectVersion % Test,
       "org.typelevel" %% "cats-effect-testkit" % CatsEffectVersion      % Test
