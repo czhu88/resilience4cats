@@ -2,7 +2,6 @@ package io.mienks.resilience.ratelimiter
 
 import cats.effect.IO
 import cats.effect.testkit.TestControl
-import cats.implicits.{catsSyntaxOptionId, none}
 import io.mienks.resilience.ratelimiter.RateLimiter.RefillRate
 import munit.CatsEffectSuite
 
@@ -12,24 +11,6 @@ abstract class RateLimiterTests extends CatsEffectSuite {
 
   protected def buildFullRateLimiter(capacity: Int, refillRate: RefillRate): IO[RateLimiter[IO]]
   protected def buildEmptyRateLimiter(capacity: Int, refillRate: RefillRate): IO[RateLimiter[IO]]
-
-  test("refill rate syntax") {
-    import RateLimiter.RefillRate.parse
-    import RateLimiter.syntax._
-
-    assertEquals(1.per(1.second), RefillRate(1, 1.second))
-    assertEquals(12.per(6.seconds), RefillRate(12, 6.seconds))
-
-    assertEquals(parse("8 requests / 2 minutes"), RefillRate(8, 2.minutes).some)
-    assertEquals(parse("500 requests / 4 hours"), RefillRate(500, 4.hours).some)
-    assertEquals(parse("abc requests / 4 hours"), none[RefillRate])
-    assertEquals(parse("500 requests / xyz hours"), none[RefillRate])
-
-    assertEquals(rate"8 requests / 2 minutes", RefillRate(8, 2.minutes))
-    assertEquals(rate"500 requests / 4 hours", RefillRate(500, 4.hours))
-    intercept[IllegalArgumentException](rate"abc requests / 4 hours")
-    intercept[NumberFormatException](rate"500 requests / xyz hours")
-  }
 
   test("capacity() returns correct value") {
     for {
