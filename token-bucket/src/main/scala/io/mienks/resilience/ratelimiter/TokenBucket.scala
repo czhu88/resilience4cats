@@ -21,14 +21,16 @@ import io.mienks.resilience.ratelimiter.RateLimiter.RefillRate
   */
 class TokenBucket[F[_]: Monad: Clock] private (
     bucketCapacity: Double,
-    refillRate: RefillRate,
+    configuredRefillRate: RefillRate,
     lastRefill: AtomicCell[F, FiniteDuration],
     tokens: Ref[F, Double]
 ) extends RateLimiter[F] {
 
-  private val tokensPerNanosecond: Double = refillRate.requests.toDouble / refillRate.period.toNanos
+  private val tokensPerNanosecond: Double = configuredRefillRate.requests.toDouble / configuredRefillRate.period.toNanos
 
   def capacity: F[Int] = Applicative[F].pure(bucketCapacity.toInt)
+
+  override def refillRate: F[RefillRate] = configuredRefillRate.pure[F]
 
   /** Get the amount of current tokens
     * @return
@@ -96,7 +98,7 @@ object TokenBucket {
       )
     } yield new TokenBucket[F](
       capacity.toDouble,
-      refillRate,
+      configuredRefillRate = refillRate,
       lastRefill,
       tokens
     )
