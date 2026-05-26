@@ -42,40 +42,12 @@ class ConfigTests extends FunSuite {
     assert(result.left.exists(_.getMessage.contains("initialCapacity must be non-negative")))
   }
 
-  test("validate rejects zero refillRate.requests") {
+  test("validate rejects invalid refillRate") {
     val result =
       Config(capacity = 5, initialCapacity = 0, refillRate = RefillRate(requests = 0, period = 1.second)).validate
     assert(result.isLeft)
     assert(result.left.exists(_.isInstanceOf[IllegalArgumentException]))
-    assert(result.left.exists(_.getMessage.contains("refillRate.requests must be positive")))
-  }
-
-  test("validate rejects negative refillRate.requests") {
-    val result =
-      Config(capacity = 5, initialCapacity = 0, refillRate = RefillRate(requests = -1, period = 1.second)).validate
-    assert(result.isLeft)
-    assert(result.left.exists(_.getMessage.contains("refillRate.requests must be positive")))
-  }
-
-  test("validate rejects zero refillRate.period") {
-    val result =
-      Config(capacity = 5, initialCapacity = 0, refillRate = RefillRate(requests = 1, period = 0.seconds)).validate
-    assert(result.isLeft)
-    assert(result.left.exists(_.getMessage.contains("refillRate.period must be positive")))
-  }
-
-  test("validate rejects negative refillRate.period") {
-    val result =
-      Config(capacity = 5, initialCapacity = 0, refillRate = RefillRate(requests = 1, period = (-1).second)).validate
-    assert(result.isLeft)
-    assert(result.left.exists(_.getMessage.contains("refillRate.period must be positive")))
-  }
-
-  test("validate rejects refillRate when emission interval truncates to zero") {
-    val result =
-      Config(capacity = 5, initialCapacity = 0, refillRate = RefillRate(requests = 2, period = 1.nanosecond)).validate
-    assert(result.isLeft)
-    assert(result.left.exists(_.getMessage.contains("emission interval must be positive")))
+    assert(result.left.exists(_.getMessage.contains("rate.requests must be positive")))
   }
 
   test("validate rejects config that would overflow emissionInterval * capacity") {

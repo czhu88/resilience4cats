@@ -1,4 +1,4 @@
-package io.mienks.resilience.circuitbreaker
+package io.mienks.resilience
 
 import cats.effect.{Clock, Ref, Sync}
 import cats.kernel.Eq
@@ -13,8 +13,6 @@ trait Measurements[F[_]] {
   def record(isFailure: Boolean): F[Snapshot]
 
   def reset: F[Unit]
-
-  def isInitialized: F[Boolean]
 }
 
 object Measurements {
@@ -38,13 +36,14 @@ object Measurements {
     *   the number of recorded outcomes currently in the window
     * @param totalFailures
     *   the number of recorded failures currently in the window
+    * @param isInitialized
+    *   whether the window has enough measurements to evaluate rates
     */
-  final case class Snapshot(totalMeasurements: Int, totalFailures: Int) {
+  final case class Snapshot(totalMeasurements: Int, totalFailures: Int, isInitialized: Boolean) {
 
-    /** The ratio of failures to total measurements. Callers must ensure `totalMeasurements > 0`; dividing by zero
-      * yields `NaN`.
-      */
-    def failureRate: Double = totalFailures.toDouble / totalMeasurements
+    /** The ratio of failures to total measurements, or `None` when [[isInitialized]] is false. */
+    def failureRate: Option[Double] =
+      Option.when(isInitialized)(totalFailures.toDouble / totalMeasurements)
   }
 
   object Snapshot {
@@ -61,9 +60,6 @@ final class CountBasedSlidingWindowMeasurements[F[_]: Sync] private (
 
   override def reset: F[Unit] =
     stateRef.update(_.reset)
-
-  override def isInitialized: F[Boolean] =
-    stateRef.get.map(_.isInitialized)
 }
 
 object CountBasedSlidingWindowMeasurements {
@@ -73,7 +69,7 @@ object CountBasedSlidingWindowMeasurements {
       .of(State.empty(windowSize, minNumberOfCalls))
       .map(new CountBasedSlidingWindowMeasurements[F](_))
 
-  private[circuitbreaker] final case class State(
+  private[resilience] final case class State(
       failures: immutable.BitSet,
       index: Int,
       windowSize: Int,
@@ -96,16 +92,18 @@ object CountBasedSlidingWindowMeasurements {
           totalMeasurements = newTotalMeasurements,
           totalFailures = newFailures
         ),
-        Snapshot(newTotalMeasurements, newFailures)
+        Snapshot(
+          totalMeasurements = newTotalMeasurements,
+          totalFailures = newFailures,
+          isInitialized = newTotalMeasurements >= minNumberOfCalls
+        )
       )
     }
-
-    def isInitialized: Boolean = totalMeasurements >= minNumberOfCalls
 
     def reset: State = State.empty(windowSize, minNumberOfCalls)
   }
 
-  private[circuitbreaker] object State {
+  private[resilience] object State {
 
     def empty(windowSize: Int, minNumberOfCalls: Int): State = State(
       failures = immutable.BitSet.empty,
@@ -131,9 +129,6 @@ final class TimeBasedSlidingWindowMeasurements[F[_]: Sync] private (
     Clock[F].monotonic.map(_.toNanos).flatMap { now =>
       stateRef.update(_.reset(now))
     }
-
-  override def isInitialized: F[Boolean] =
-    stateRef.get.map(_.isInitialized)
 }
 
 object TimeBasedSlidingWindowMeasurements {
@@ -157,7 +152,7 @@ object TimeBasedSlidingWindowMeasurements {
       )
     } yield new TimeBasedSlidingWindowMeasurements[F](stateRef)
 
-  private[circuitbreaker] final case class TimeBucket(createdAt: Long, failures: Int, total: Int) {
+  private[resilience] final case class TimeBucket(createdAt: Long, failures: Int, total: Int) {
     def addMeasurement(isFailure: Boolean): TimeBucket =
       copy(failures = failures + (if (isFailure) 1 else 0), total = total + 1)
   }
@@ -166,7 +161,7 @@ object TimeBasedSlidingWindowMeasurements {
     def empty(createdAt: Long): TimeBucket = TimeBucket(createdAt, failures = 0, total = 0)
   }
 
-  private[circuitbreaker] final case class State(
+  private[resilience] final case class State(
       buckets: Vector[TimeBucket],
       index: Int,
       numberOfBuckets: Int,
@@ -207,17 +202,19 @@ object TimeBasedSlidingWindowMeasurements {
           totalMeasurements = curTotalMeasurements,
           totalFailures = curTotalFailures
         ),
-        Snapshot(curTotalMeasurements, curTotalFailures)
+        Snapshot(
+          totalMeasurements = curTotalMeasurements,
+          totalFailures = curTotalFailures,
+          isInitialized = curTotalMeasurements >= minNumberOfCalls
+        )
       )
     }
-
-    def isInitialized: Boolean = totalMeasurements >= minNumberOfCalls
 
     def reset(now: Long): State =
       State.initial(numberOfBuckets, bucketLengthInNanos, minNumberOfCalls, now)
   }
 
-  private[circuitbreaker] object State {
+  private[resilience] object State {
 
     def initial(
         numberOfBuckets: Int,

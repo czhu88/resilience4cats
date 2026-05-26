@@ -623,9 +623,8 @@ object CircuitBreaker {
       circuitBreakerState.get.flatMap {
         case Closed =>
           for {
-            snapshot      <- measurements.record(isFailure)
-            isInitialized <- measurements.isInitialized
-            breachedThreshold = isInitialized && snapshot.failureRate >= failureRateThreshold
+            snapshot <- measurements.record(isFailure)
+            breachedThreshold = snapshot.failureRate.exists(_ >= failureRateThreshold)
             fa <-
               if (breachedThreshold)
                 for {

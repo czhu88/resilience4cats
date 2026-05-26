@@ -13,9 +13,9 @@ ThisBuild / developers   := List(
 ThisBuild / description := "Resilience structures not included in Cats Effect standard library, such as `CircuitBreaker` and `RateLimiter`."
 
 lazy val root = (project in file("."))
-  .aggregate(circuitBreaker, benchmarks, rateLimiter, tokenBucket, resilience4cats)
+  .aggregate(core, circuitBreaker, benchmarks, rateLimiter, tokenBucket, resilience4cats)
   .settings(
-    name := "resilience4cats-root",
+    name            := "resilience4cats-root",
     publishArtifact := false,
     publish / skip  := true
   )
@@ -28,11 +28,23 @@ lazy val resilience4cats = project
     Compile / packageSrc / publishArtifact := false,
     Compile / packageDoc / publishArtifact := false
   )
-  .dependsOn(circuitBreaker, rateLimiter)
-  .aggregate(circuitBreaker, rateLimiter)
+  .dependsOn(core, circuitBreaker, rateLimiter)
+  .aggregate(core, circuitBreaker, rateLimiter)
 
 val CatsEffectVersion      = "3.6.3"
 val MunitCatsEffectVersion = "2.1.0"
+
+lazy val core = project
+  .in(file("core"))
+  .settings(
+    name := "core",
+    libraryDependencies ++= Seq(
+      "org.typelevel" %% "cats-effect"         % CatsEffectVersion,
+      "org.typelevel" %% "munit-cats-effect"   % MunitCatsEffectVersion % Test,
+      "org.typelevel" %% "cats-effect-testkit" % CatsEffectVersion      % Test
+    ),
+    testFrameworks += new TestFramework("munit.Framework")
+  )
 
 lazy val circuitBreaker = project
   .in(file("circuit-breaker"))
@@ -45,6 +57,7 @@ lazy val circuitBreaker = project
     ),
     testFrameworks += new TestFramework("munit.Framework")
   )
+  .dependsOn(core)
 
 lazy val benchmarks = project
   .in(file("benchmarks"))
@@ -66,11 +79,12 @@ lazy val rateLimiter = project
     ),
     testFrameworks += new TestFramework("munit.Framework")
   )
+  .dependsOn(core)
 
 lazy val tokenBucket = project
   .in(file("token-bucket"))
   .settings(
-    name         := "token-bucket",
+    name           := "token-bucket",
     publish / skip := true,
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect"         % CatsEffectVersion,
