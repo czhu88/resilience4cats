@@ -21,20 +21,20 @@ final case class Rate(requests: Int, period: FiniteDuration) extends Ordered[Rat
       _ <- Either.cond(
         requests > 0,
         (),
-        new IllegalArgumentException(s"refillRate.requests must be positive, got: ${requests.toString}")
+        new IllegalArgumentException(s"rate.requests must be positive, got: ${requests.toString}")
           with NoStackTrace
       )
       _ <- Either.cond(
         period.toNanos > 0,
         (),
-        new IllegalArgumentException(s"refillRate.period must be positive, got: $period") with NoStackTrace
+        new IllegalArgumentException(s"rate.period must be positive, got: $period") with NoStackTrace
       )
       interval = period.toNanos / requests
       _ <- Either.cond(
         interval > 0,
         (),
         new IllegalArgumentException(
-          s"refillRate emission interval must be positive (period.toNanos / requests); " +
+          s"rate emission interval must be positive (period.toNanos / requests); " +
             s"got ${interval}ns for $requests requests / $period"
         ) with NoStackTrace
       )
