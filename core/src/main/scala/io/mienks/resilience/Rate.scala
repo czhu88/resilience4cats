@@ -21,8 +21,7 @@ final case class Rate(requests: Int, period: FiniteDuration) extends Ordered[Rat
       _ <- Either.cond(
         requests > 0,
         (),
-        new IllegalArgumentException(s"rate.requests must be positive, got: ${requests.toString}")
-          with NoStackTrace
+        new IllegalArgumentException(s"rate.requests must be positive, got: ${requests.toString}") with NoStackTrace
       )
       _ <- Either.cond(
         period.toNanos > 0,
