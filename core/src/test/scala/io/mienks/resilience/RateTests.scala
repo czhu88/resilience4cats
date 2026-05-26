@@ -91,9 +91,9 @@ final class RateTests extends FunSuite {
 
     assert(zeroRequests.isLeft)
     assert(zeroRequests.left.exists(_.isInstanceOf[IllegalArgumentException]))
-    assert(zeroRequests.left.exists(_.getMessage.contains("refillRate.requests must be positive")))
+    assert(zeroRequests.left.exists(_.getMessage.contains("rate.requests must be positive")))
     assert(negativeRequests.isLeft)
-    assert(negativeRequests.left.exists(_.getMessage.contains("refillRate.requests must be positive")))
+    assert(negativeRequests.left.exists(_.getMessage.contains("rate.requests must be positive")))
   }
 
   test("validate rejects non-positive periods") {
@@ -101,9 +101,9 @@ final class RateTests extends FunSuite {
     val negativePeriod = Rate(requests = 1, period = (-1).second).validate
 
     assert(zeroPeriod.isLeft)
-    assert(zeroPeriod.left.exists(_.getMessage.contains("refillRate.period must be positive")))
+    assert(zeroPeriod.left.exists(_.getMessage.contains("rate.period must be positive")))
     assert(negativePeriod.isLeft)
-    assert(negativePeriod.left.exists(_.getMessage.contains("refillRate.period must be positive")))
+    assert(negativePeriod.left.exists(_.getMessage.contains("rate.period must be positive")))
   }
 
   test("validate rejects zero emission interval") {
