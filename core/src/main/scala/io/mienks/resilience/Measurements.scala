@@ -13,8 +13,6 @@ trait Measurements[F[_]] {
   def record(isFailure: Boolean): F[Snapshot]
 
   def reset: F[Unit]
-
-  def isInitialized: F[Boolean]
 }
 
 object Measurements {
@@ -62,9 +60,6 @@ final class CountBasedSlidingWindowMeasurements[F[_]: Sync] private (
 
   override def reset: F[Unit] =
     stateRef.update(_.reset)
-
-  override def isInitialized: F[Boolean] =
-    stateRef.get.map(_.isInitialized)
 }
 
 object CountBasedSlidingWindowMeasurements {
@@ -105,8 +100,6 @@ object CountBasedSlidingWindowMeasurements {
       )
     }
 
-    def isInitialized: Boolean = totalMeasurements >= minNumberOfCalls
-
     def reset: State = State.empty(windowSize, minNumberOfCalls)
   }
 
@@ -136,9 +129,6 @@ final class TimeBasedSlidingWindowMeasurements[F[_]: Sync] private (
     Clock[F].monotonic.map(_.toNanos).flatMap { now =>
       stateRef.update(_.reset(now))
     }
-
-  override def isInitialized: F[Boolean] =
-    stateRef.get.map(_.isInitialized)
 }
 
 object TimeBasedSlidingWindowMeasurements {
@@ -219,8 +209,6 @@ object TimeBasedSlidingWindowMeasurements {
         )
       )
     }
-
-    def isInitialized: Boolean = totalMeasurements >= minNumberOfCalls
 
     def reset(now: Long): State =
       State.initial(numberOfBuckets, bucketLengthInNanos, minNumberOfCalls, now)
