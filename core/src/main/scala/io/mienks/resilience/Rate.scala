@@ -2,6 +2,7 @@ package io.mienks.resilience
 
 import cats.kernel.{Monoid, Order}
 import cats.syntax.all._
+import io.mienks.resilience.Rate.{Zero, inReducedForm}
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration._
@@ -16,6 +17,7 @@ import scala.util.control.NoStackTrace
 final case class Rate(requests: Int, period: FiniteDuration) extends Ordered[Rate] {
   def emissionIntervalNanos: Long = period.toNanos / requests
 
+  // TODO: move this relevant classes
   def validate: Either[Throwable, Long] =
     for {
       _ <- Either.cond(
@@ -44,6 +46,30 @@ final case class Rate(requests: Int, period: FiniteDuration) extends Ordered[Rat
     val rhs = BigInt(that.requests) * BigInt(this.period.toNanos)
     lhs.compare(rhs)
   }
+
+  def min(that: Rate): Rate =
+    if (this <= that) this else that
+
+  def max(that: Rate): Rate =
+    if (this >= that) this else that
+
+  def +(that: Rate): Rate = {
+    val x   = this
+    val y   = that
+    val px  = BigInt(x.period.toNanos)
+    val py  = BigInt(y.period.toNanos)
+    val num = BigInt(x.requests) * py + BigInt(y.requests) * px
+    val den = px * py
+    if (num == 0) Zero
+    else {
+      val requestsForXPeriod = num / py
+      if (num % py == 0 && requestsForXPeriod.isValidInt)
+        Rate(requests = requestsForXPeriod.toInt, period = x.period)
+      else inReducedForm(numerator = num, denominator = den, opName = "combine")
+    }
+  }
+
+  def -(that: Rate): Rate = subtract(that)
 
   /** `max(0, this - that)` */
   def subtract(that: Rate): Rate = {
@@ -78,11 +104,23 @@ final case class Rate(requests: Int, period: FiniteDuration) extends Ordered[Rat
         else
           (mantissa * BigInt(10).pow(-scale), BigInt(1))
 
-      Rate.inReducedForm(
-        numerator = BigInt(this.requests) * factorNum,
-        denominator = BigInt(this.period.toNanos) * factorDen,
-        opName = "scaleBy"
-      )
+      val numerator = BigInt(this.requests) * factorNum
+      if (numerator % factorDen == 0) {
+        val requests = numerator / factorDen
+        if (requests.isValidInt)
+          Rate(requests = requests.toInt, period = this.period)
+        else
+          Rate.inReducedForm(
+            numerator = numerator,
+            denominator = BigInt(this.period.toNanos) * factorDen,
+            opName = "scaleBy"
+          )
+      } else
+        Rate.inReducedForm(
+          numerator = numerator,
+          denominator = BigInt(this.period.toNanos) * factorDen,
+          opName = "scaleBy"
+        )
     }
   }
 }
@@ -102,14 +140,7 @@ object Rate {
   /** Sum of effective rates (requests/time), i.e. rational addition of `requests/period`. */
   implicit val rateMonoid: Monoid[Rate] = new Monoid[Rate] {
     def empty: Rate                     = Zero
-    def combine(x: Rate, y: Rate): Rate = {
-      val p1  = BigInt(x.period.toNanos)
-      val p2  = BigInt(y.period.toNanos)
-      val num = BigInt(x.requests) * p2 + BigInt(y.requests) * p1
-      val den = p1 * p2
-      if (num == 0) Zero
-      else inReducedForm(numerator = num, denominator = den, opName = "combine")
-    }
+    def combine(x: Rate, y: Rate): Rate = x + y
   }
 
   private[resilience] def inReducedForm(numerator: BigInt, denominator: BigInt, opName: String): Rate = {
@@ -124,7 +155,7 @@ object Rate {
       throw new IllegalArgumentException(
         s"Rate.$opName: resulting period does not fit in Long or is non-positive ($d)"
       )
-    Rate(n.toInt, d.toLong.nanoseconds)
+    Rate(n.toInt, Duration.fromNanos(d.toLong))
   }
 
   def parse(rate: String): Option[Rate] =

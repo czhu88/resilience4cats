@@ -5,6 +5,7 @@ import cats.kernel.Eq
 import cats.syntax.all._
 import Measurements.Snapshot
 
+import java.util.concurrent.atomic.LongAdder
 import scala.collection.immutable
 import scala.concurrent.duration._
 
@@ -13,6 +14,20 @@ trait Measurements[F[_]] {
   def record(isFailure: Boolean): F[Snapshot]
 
   def reset: F[Unit]
+}
+
+/** Counter-backed measurements where recording and sampling happen on different cadences.
+  *
+  * `recordSuccess` and `recordFailure` are safe to call from many fibers concurrently. `sample` must be called from a
+  * single fiber because the bucket window state is intentionally mutable.
+  */
+trait SampledMeasurements[F[_]] {
+
+  def recordSuccess: F[Unit]
+
+  def recordFailure: F[Unit]
+
+  def sample: F[Snapshot]
 }
 
 object Measurements {
@@ -29,6 +44,29 @@ object Measurements {
       minNumberOfCalls: Int
   ): F[TimeBasedSlidingWindowMeasurements[F]] =
     TimeBasedSlidingWindowMeasurements(numberOfBuckets, bucketSize, minNumberOfCalls)
+
+  /** Approximates failure rate over a sliding time window.
+    *
+    * `recordSuccess` and `recordFailure` may be called concurrently. `sample` is NOT thread safe and intended for a
+    * single consumer.
+    *
+    * windowSize (duration) = numberOfBuckets * bucketSize
+    *
+    * @param numberOfBuckets
+    *   the number of intervals that make up the window size
+    * @param bucketSize
+    *   the duration of each interval
+    * @param minNumberOfCalls
+    *   the minimum number of recorded calls required before the failure rate is considered initialized and valid;
+    *   recordings below this value indicate that the algorithm doesn't know the real failure rate.
+    * @return
+    */
+  def sampledTimeBasedSlidingWindow[F[_]: Sync](
+      numberOfBuckets: Int,
+      bucketSize: FiniteDuration,
+      minNumberOfCalls: Int
+  ): F[SampledMeasurements[F]] =
+    SampledTimeBasedSlidingWindowMeasurements(numberOfBuckets, bucketSize, minNumberOfCalls).widen
 
   /** A point-in-time view of the sliding window's aggregate counters.
     *
@@ -49,6 +87,115 @@ object Measurements {
   object Snapshot {
     implicit val eq: Eq[Snapshot] = Eq.fromUniversalEquals
   }
+}
+
+/** Approximates failure rate over a sliding time window.
+  *
+  * `recordSuccess` and `recordFailure` may be called concurrently. `sample` is NOT thread safe and intended for a
+  * single consumer.
+  */
+final class SampledTimeBasedSlidingWindowMeasurements[F[_]: Sync] private (
+    successCount: LongAdder,
+    failureCount: LongAdder,
+    numberOfBuckets: Int,
+    bucketLengthInNanos: Long,
+    minNumberOfCalls: Int,
+    createdAt: Long
+) extends SampledMeasurements[F] {
+
+  private val buckets =
+    Array.fill(numberOfBuckets)(SampledTimeBasedSlidingWindowMeasurements.TimeBucket.empty(createdAt = createdAt))
+  private var index             = 0
+  private var totalMeasurements = 0L
+  private var totalFailures     = 0L
+  private var lastSuccessCount  = 0L
+  private var lastFailureCount  = 0L
+
+  override def recordSuccess: F[Unit] =
+    Sync[F].delay(successCount.increment())
+
+  override def recordFailure: F[Unit] =
+    Sync[F].delay(failureCount.increment())
+
+  override def sample: F[Snapshot] =
+    Clock[F].monotonic.map(_.toNanos).flatMap { now =>
+      Sync[F].delay(
+        sample(now = now, currentSuccessCount = successCount.sum(), currentFailureCount = failureCount.sum())
+      )
+    }
+
+  private def sample(now: Long, currentSuccessCount: Long, currentFailureCount: Long): Snapshot = {
+    val successDelta = currentSuccessCount - lastSuccessCount
+    val failureDelta = currentFailureCount - lastFailureCount
+
+    lastSuccessCount = currentSuccessCount
+    lastFailureCount = currentFailureCount
+
+    val timeBucketsSinceLastUpdate = (now - buckets(index).createdAt) / bucketLengthInNanos
+    if (timeBucketsSinceLastUpdate > 0L) {
+      var bucketsToMoveBy = math.min(timeBucketsSinceLastUpdate, numberOfBuckets.toLong)
+      do {
+        bucketsToMoveBy -= 1L
+        index = (index + 1) % numberOfBuckets
+        totalMeasurements -= buckets(index).total
+        totalFailures -= buckets(index).failures
+        buckets(index).reset(newCreatedAt = now)
+      } while (bucketsToMoveBy > 0L)
+    }
+
+    buckets(index).add(successes = successDelta, newFailures = failureDelta)
+    totalMeasurements += successDelta + failureDelta
+    totalFailures += failureDelta
+
+    Snapshot(
+      totalMeasurements = totalMeasurements.toInt,
+      totalFailures = totalFailures.toInt,
+      isInitialized = totalMeasurements >= minNumberOfCalls.toLong
+    )
+  }
+}
+
+object SampledTimeBasedSlidingWindowMeasurements {
+
+  def apply[F[_]: Sync](
+      numberOfBuckets: Int,
+      bucketSize: FiniteDuration,
+      minNumberOfCalls: Int
+  ): F[SampledTimeBasedSlidingWindowMeasurements[F]] =
+    for {
+      _            <- Sync[F].delay(require(numberOfBuckets > 0, "numberOfBuckets > 0"))
+      _            <- Sync[F].delay(require(bucketSize >= 10.milliseconds, "bucketSize >= 10.milliseconds"))
+      now          <- Clock[F].monotonic
+      measurements <- Sync[F].delay {
+        new SampledTimeBasedSlidingWindowMeasurements[F](
+          successCount = new LongAdder(),
+          failureCount = new LongAdder(),
+          numberOfBuckets = numberOfBuckets,
+          bucketLengthInNanos = bucketSize.toNanos,
+          minNumberOfCalls = minNumberOfCalls,
+          createdAt = now.toNanos
+        )
+      }
+    } yield measurements
+
+  private final class TimeBucket(var createdAt: Long, var failures: Long, var total: Long) {
+
+    def reset(newCreatedAt: Long): Unit = {
+      createdAt = newCreatedAt
+      failures = 0L
+      total = 0L
+    }
+
+    def add(successes: Long, newFailures: Long): Unit = {
+      failures += newFailures
+      total += successes + newFailures
+    }
+  }
+
+  private object TimeBucket {
+    def empty(createdAt: Long): TimeBucket = new TimeBucket(createdAt, failures = 0L, total = 0L)
+  }
+
 }
 
 final class CountBasedSlidingWindowMeasurements[F[_]: Sync] private (

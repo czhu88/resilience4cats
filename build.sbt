@@ -13,7 +13,7 @@ ThisBuild / developers   := List(
 ThisBuild / description := "Resilience structures not included in Cats Effect standard library, such as `CircuitBreaker` and `RateLimiter`."
 
 lazy val root = (project in file("."))
-  .aggregate(core, circuitBreaker, benchmarks, rateLimiter, tokenBucket, resilience4cats)
+  .aggregate(core, circuitBreaker, benchmarks, rateLimiter, tokenBucket, adaptiveRateLimiter, resilience4cats)
   .settings(
     name            := "resilience4cats-root",
     publishArtifact := false,
@@ -32,6 +32,7 @@ lazy val resilience4cats = project
   .aggregate(core, circuitBreaker, rateLimiter)
 
 val CatsEffectVersion      = "3.6.3"
+val Fs2Version             = "3.11.0"
 val MunitCatsEffectVersion = "2.1.0"
 
 lazy val core = project
@@ -80,6 +81,20 @@ lazy val rateLimiter = project
     testFrameworks += new TestFramework("munit.Framework")
   )
   .dependsOn(core)
+
+lazy val adaptiveRateLimiter = project
+  .in(file("adaptive-rate-limiter"))
+  .settings(
+    name := "adaptive-rate-limiter",
+    libraryDependencies ++= Seq(
+      "org.typelevel" %% "cats-effect"         % CatsEffectVersion,
+      "co.fs2"        %% "fs2-core"            % Fs2Version,
+      "org.typelevel" %% "munit-cats-effect"   % MunitCatsEffectVersion % Test,
+      "org.typelevel" %% "cats-effect-testkit" % CatsEffectVersion      % Test
+    ),
+    testFrameworks += new TestFramework("munit.Framework")
+  )
+  .dependsOn(rateLimiter)
 
 lazy val tokenBucket = project
   .in(file("token-bucket"))
