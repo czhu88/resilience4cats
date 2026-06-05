@@ -72,7 +72,11 @@ object AdaptiveRateLimiter {
     */
   final case class HysteresisBand(exit: Double, start: Double) {
     def validate: Either[String, Unit] =
-      Either.cond(start >= exit, (), "start >= exit to contain hysteresis")
+      for {
+        _ <- Either.cond(exit >= 0.0 && exit <= 1.0, (), "0 <= exit <= 1")
+        _ <- Either.cond(start >= 0.0 && start <= 1.0, (), "0 <= start <= 1")
+        _ <- Either.cond(start >= exit, (), "start >= exit to contain hysteresis")
+      } yield ()
   }
 
   /** Configuration for [[AdaptiveRateLimiter.start]].
