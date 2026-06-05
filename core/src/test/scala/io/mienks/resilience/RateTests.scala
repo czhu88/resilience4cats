@@ -14,6 +14,8 @@ final class RateTests extends FunSuite {
   test("Eq matches throughput") {
     assert(Rate(1, 1.second) === Rate(60, 1.minute))
     assert(Rate(1, 1.second) =!= Rate(2, 1.second))
+
+    assert(Rate(requests = 1, period = 30.seconds) === Rate(requests = 2, period = 1.minute))
   }
 
   test("Monoid empty is zero; combine sums effective rates") {
@@ -23,6 +25,9 @@ final class RateTests extends FunSuite {
     assert((onePerSecond |+| Rate.Zero) === onePerSecond)
     assert((onePerSecond |+| onePerSecond) === Rate(2, 1.second))
     assert((onePerSecond |+| onePerSecond) === 2.per(1.second))
+    assertEquals(60.per(1.minute) |+| onePerSecond, 120.per(1.minute))
+    assertEquals(onePerSecond |+| 60.per(1.minute), 2.per(1.second))
+    assertEquals(Int.MaxValue.per(1.second) |+| Int.MaxValue.per(1.second), Int.MaxValue.per(500.millis))
   }
 
   test("Monoid combine is associative") {
@@ -63,6 +68,20 @@ final class RateTests extends FunSuite {
     assert(onePerSecond < twoPerSecond)
     assert(twoPerSecond.compare(onePerSecond) > 0)
     assertEquals(Order[Rate].compare(x = onePerSecond, y = twoPerSecond), onePerSecond.compare(twoPerSecond))
+  }
+
+  test("min and max compare by effective throughput") {
+    val onePerSecond    = Rate(1, 1.second)
+    val sixtyPerMinute  = Rate(60, 1.minute)
+    val thirtyPerMinute = Rate(30, 1.minute)
+    val twoPerSecond    = Rate(2, 1.second)
+
+    assertEquals(onePerSecond.min(that = thirtyPerMinute), thirtyPerMinute)
+    assertEquals(thirtyPerMinute.max(that = onePerSecond), onePerSecond)
+    assertEquals(onePerSecond.max(that = twoPerSecond), twoPerSecond)
+    assertEquals(twoPerSecond.min(that = onePerSecond), onePerSecond)
+    assertEquals(onePerSecond.min(that = sixtyPerMinute), onePerSecond)
+    assertEquals(sixtyPerMinute.max(that = onePerSecond), sixtyPerMinute)
   }
 
   test("subtract clamps to zeroThroughput when subtrahend is larger or equal") {
@@ -121,7 +140,9 @@ final class RateTests extends FunSuite {
     assert(fivePerSecond.scaleBy(factor = 0.0) === 0.per(1.second))
 
     assert(10.per(1.second).scaleBy(factor = 0.5) === 5.per(1.second))
+    assertEquals(10.per(1.second).scaleBy(factor = 0.5), 5.per(1.second))
     assert(1.per(1.second).scaleBy(factor = 0.2) === Rate(1, 5.seconds))
+    assertEquals(1.per(30.seconds).scaleBy(factor = 0.5), 1.per(1.minute))
 
     assert(1.per(1.second).scaleBy(factor = 0.0) === Rate.Zero)
     assert(Rate.Zero.scaleBy(factor = 3.0) === Rate.Zero)
@@ -129,6 +150,8 @@ final class RateTests extends FunSuite {
 
     assert(1.per(1.nanosecond).scaleBy(factor = 10.0) === 10.per(1.nanosecond))
     assert(1.per(3.nanoseconds).scaleBy(factor = 2.0) === 2.per(3.nanoseconds))
+    assertEquals(1.per(3.nanoseconds).scaleBy(factor = 2.0), 2.per(3.nanoseconds))
+    assertEquals(Int.MaxValue.per(1.second).scaleBy(factor = 2.0), Int.MaxValue.per(500.millis))
 
     intercept[IllegalArgumentException](1.per(1.second).scaleBy(factor = -0.1))
     intercept[IllegalArgumentException](1.per(1.second).scaleBy(factor = Double.NaN))

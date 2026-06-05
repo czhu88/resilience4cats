@@ -16,6 +16,7 @@ libraryDependencies += "io.github.mmienko" %% "resilience4cats" % "<version>"
 // Or individual modules
 libraryDependencies += "io.github.mmienko" %% "circuit-breaker" % "<version>"
 libraryDependencies += "io.github.mmienko" %% "rate-limiter" % "<version>"
+libraryDependencies += "io.github.mmienko" %% "adaptive-rate-limiter" % "<version>"
 ```
 
 ## Rate-Limiter
@@ -108,6 +109,100 @@ for {
   _ <- rl.update(RateLimiter.Config(capacity = 50, initialCapacity = 0, refillRate = rate"5 requests / 1 second"))
 } yield ()
 ```
+
+## Adaptive-Rate-Limiter
+The `adaptive-rate-limiter` estimates and self-tunes the estimated rate at which a downstream resource (the
+"protected sink") can be invoked. It wraps a `DynamicRateLimiter` whose refill rate is driven by an AIMD (Additive
+Increase / Multiplicative Decrease) control loop reacting to observed failure rates.
+
+Outcomes are recorded on a hot path with `recordSuccess` and `recordFailure` (cheap, lock-free). A background fiber
+samples those counters over a time-based sliding window, categorizes the failure ratio into hysteresis bands to avoid
+flapping, and feeds the result into the AIMD loop. Additive increase runs on a fixed tick; multiplicative decrease
+fires when the categorizer reports a worsening signal.
+
+```scala
+trait AdaptiveRateLimiter[F[_]] {
+  def consume: F[Boolean]
+  def recordSuccess: F[Unit]
+  def recordFailure: F[Unit]
+  def rate: F[Rate]
+  def failureRatio: F[Double]
+}
+```
+
+### Usage
+
+`AdaptiveRateLimiter.start` returns a `Resource` that owns the background control loop. Call `consume` before invoking
+the protected sink; record the outcome afterward (or use the `protect` syntax extension to do both in one step).
+
+```scala
+import cats.data.NonEmptyList
+import cats.effect._
+import io.mienks.resilience.Rate
+import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter
+import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.syntax._
+import scala.concurrent.duration._
+
+val failureLevels = NonEmptyList.of(
+  AdaptiveRateLimiter.HysteresisBand(exit = 0.1, start = 0.3), // minor degradation
+  AdaptiveRateLimiter.HysteresisBand(exit = 0.4, start = 0.7), // severe degradation
+)
+
+val config = AdaptiveRateLimiter.Config.fromRps(
+  minRps = 10,
+  maxRps = 100,
+  rpsIncreaseRate = Rate(requests = 5, period = 1.second),
+  rpsDecrease = 0.5,
+  timeRangeForMeasurementInSeconds = 60,
+  failureLevels = failureLevels,
+)
+
+AdaptiveRateLimiter.start[IO](config = config).use { limiter =>
+  limiter.protect(
+    fa = callProtectedSink,
+    isError = _.isLeft,
+    orElse = Left("rate limited"),
+  )
+}
+```
+
+When the limiter is exhausted, `protect` returns `orElse` without recording an outcome. Use `protectF` when the
+failure classifier itself is effectful.
+
+### Configuration
+
+`Config` ties together the rate limiter, measurement window, hysteresis bands, and AIMD parameters. The rate-shaped
+fields (`initialRate`, `minRate`, `maxRate`, `rateIncreaseBy`) describe the AIMD's estimate of sustainable throughput;
+the underlying `DynamicRateLimiter` is always configured at that estimate.
+
+- `capacity` — maximum burst size of the underlying rate limiter
+- `initialRate` / `minRate` / `maxRate` — starting estimate and AIMD floor/ceiling
+- `rateIncreaseBy` / `rateIncreasePeriod` — additive increase step and tick interval
+- `rateDecreaseBy` — multiplicative decrease in `[0, 1]`; on a failing signal the estimate becomes `(1 - rateDecreaseBy) * current`
+- `numberOfSlotsForMeasurements` / `slotDuration` — time-bucket slots in the failure-rate sliding window
+- `measurementPeriod` — how often the background fiber samples counters
+- `minNumberOfMeasurements` — minimum samples before a failure ratio is reported
+- `failureLevels` — ordered (least- to most-severe) hysteresis bands on failure ratio
+
+Each `HysteresisBand` has an `exit` and `start` threshold (`start >= exit`). A band engages when the failure ratio
+rises to `start` and releases only after it falls to `exit` or below, which prevents oscillation around a single
+point.
+
+`Config.fromRps` is a convenience builder for RPS-shaped setups: capacity is set to `maxRps`, slots are one second
+wide, and `minNumberOfMeasurements` equals the slot count.
+
+Optional callbacks fire on control-loop events:
+
+```scala
+AdaptiveRateLimiter.start[IO](
+  config = config,
+  onFailureCategoryChange = (state: AdaptiveRateLimiter.FailureState) => IO.println(s"category: $state"),
+  onRateChange = (rate: Rate) => IO.println(s"rate: $rate"),
+)
+```
+
+The categorizer reports `FailureState.Healthy` when the failure rate is below the least-severe band's `exit`, or
+`FailureState.Failing(n)` for severity tier `n` (zero-indexed; higher is worse).
 
 ## Circuit-Breaker
 The `circuit-breaker` models a concurrent state machine used to provide stability and prevent cascading failures in
