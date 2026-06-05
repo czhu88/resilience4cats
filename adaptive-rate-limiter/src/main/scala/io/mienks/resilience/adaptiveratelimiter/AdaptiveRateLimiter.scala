@@ -11,7 +11,7 @@ import io.mienks.resilience.{Measurements, Rate, SampledMeasurements}
 
 import scala.concurrent.duration._
 
-/** Estimates and self-tunes the safe sustainable rate at which a downstream resource (the "protected sink") can be
+/** Estimates and self-tunes the estimated rate at which a downstream resource (the "protected sink") can be
   * invoked. Internally wraps a `DynamicRateLimiter` whose refill rate is driven by an AIMD (Additive Increase /
   * Multiplicative Decrease) control loop reacting to observed failure rates.
   *
