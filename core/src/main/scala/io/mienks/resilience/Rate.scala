@@ -17,7 +17,7 @@ import scala.util.control.NoStackTrace
 final case class Rate(requests: Int, period: FiniteDuration) extends Ordered[Rate] {
   def emissionIntervalNanos: Long = period.toNanos / requests
 
-  // TODO: move this relevant classes
+  // TODO: move this to a more appropriate class
   def validate: Either[Throwable, Long] =
     for {
       _ <- Either.cond(
