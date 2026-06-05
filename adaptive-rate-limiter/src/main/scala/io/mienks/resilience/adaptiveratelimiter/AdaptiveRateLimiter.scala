@@ -11,9 +11,9 @@ import io.mienks.resilience.{Measurements, Rate, SampledMeasurements}
 
 import scala.concurrent.duration._
 
-/** Estimates and self-tunes the estimated rate at which a downstream resource (the "protected sink") can be
-  * invoked. Internally wraps a `DynamicRateLimiter` whose refill rate is driven by an AIMD (Additive Increase /
-  * Multiplicative Decrease) control loop reacting to observed failure rates.
+/** Estimates and self-tunes the estimated rate at which a downstream resource (the "protected sink") can be invoked.
+  * Internally wraps a `DynamicRateLimiter` whose refill rate is driven by an AIMD (Additive Increase / Multiplicative
+  * Decrease) control loop reacting to observed failure rates.
   *
   * Outcomes are recorded with [[recordSuccess]] / [[recordFailure]] on a hot path (cheap, lock-free), then sampled on a
   * background fiber. The categorizer applies hysteresis bands to avoid flapping. The AIMD loop additively grows the
