@@ -1,6 +1,5 @@
 package io.mienks.resilience
 
-import cats.data.NonEmptyList
 import cats.kernel.{Monoid, Order}
 import cats.syntax.eq._
 import cats.syntax.option._
