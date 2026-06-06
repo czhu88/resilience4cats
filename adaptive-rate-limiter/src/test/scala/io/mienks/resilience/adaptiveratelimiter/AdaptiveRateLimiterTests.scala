@@ -216,6 +216,80 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
     }
   }
 
+  test("partial recovery: new decreases apply when re-degrading without returning to healthy") {
+    // Initial rate should be at least 2^6 larger than minRate, as there are multiple rate decreases (halvings).
+    val config = BaseConfig.copy(
+      initialRate = Rate(requests = 64, period = 1.second),
+      minRate = Rate(requests = 1, period = 1.second),
+      maxRate = Rate(requests = 64, period = 1.second),
+      rateIncreasePeriod = 1.second,
+      // Three bands so re-climbing from band 0 passes through Failing(1) (which differs from the last-emitted
+      // Failing(2)) and survives the categorizer's consecutive-duplicate suppression. With only two bands a
+      // Failing(1) -> Failing(0) -> Failing(1) round-trip would re-emit the same Failing(1) and be deduped away.
+      failureLevels = NonEmptyList.of(
+        HysteresisBand(exit = 0.1, start = 0.3), // level 0
+        HysteresisBand(exit = 0.4, start = 0.6), // level 1
+        HysteresisBand(exit = 0.7, start = 0.9)  // level 2
+      )
+    )
+
+    startLimiter(config).use { case LimiterWithEffects(limiter, categoryChanges, minObservedRate) =>
+      startHittingBackend(limiter, initialFailureRatio = 0.0).use { ratioRef =>
+        for {
+          _ <- assertRateConverges(limiter, config.initialRate)
+          // spike straight to the most severe tier: promotes through every band and cuts three times
+          _ <- ratioRef.set(0.95)
+          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 0)))
+          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 1)))
+          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 2)))
+          _ <- poll(minObservedRate.get.map(rate => assert(rate < Rate(requests = 16, period = 1.second), clue = rate)))
+          rateAfterFirstCuts <- minObservedRate.get
+          // partial recovery into band 0 (Failing(2) -> Failing(0))
+          _              <- hold(ratioRef, ratio = 0.2, duration = MeasurementWindow * 2)
+          recoverySignal <- categoryChanges.tryTake
+          _              <- IO(
+            assertEquals(recoverySignal, none[FailureState], clue = "partial recovery within the bands emits no signal")
+          )
+          // re-degrade: re-emits Failing(1) (then Failing(2)) and compounds the cut
+          _ <- ratioRef.set(0.95)
+          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 1)))
+          _ <- poll(minObservedRate.get.map(rate => assert(rate < rateAfterFirstCuts, clue = rate)))
+          _ <- minObservedRate.get.map(rate => assert(rate > MinRate, clue = rate))
+        } yield ()
+      }
+    }
+  }
+
+  test("not enough measurements: failures below the window minimum never trip a decrease") {
+    startLimiter().use { case LimiterWithEffects(limiter, categoryChanges, minObservedRate) =>
+      for {
+        // all errors, but fewer than the window minimum, so the window never initializes
+        _                  <- limiter.recordFailure.replicateA_(BaseConfig.minNumberOfMeasurements - 1)
+        _                  <- IO.sleep(MeasurementWindow)
+        ratio              <- limiter.failureRatio
+        _                  <- IO(assertEquals(ratio, 0.0))
+        category           <- categoryChanges.tryTake
+        _                  <- IO(assertEquals(category, none[FailureState]))
+        lowestObservedRate <- minObservedRate.get
+        _                  <- IO(assert(lowestObservedRate === InitialRate, clue = lowestObservedRate))
+      } yield ()
+    }
+  }
+
+  test("failureRatio reflects the sampled failure ratio of the backend") {
+    startLimiter().use { case LimiterWithEffects(limiter, _, _) =>
+      startHittingBackend(limiter, initialFailureRatio = 0.0).use { ratioRef =>
+        for {
+          _ <- poll(limiter.failureRatio.map(ratio => assert(ratio <= 0.05, clue = ratio)))
+          _ <- ratioRef.set(0.8)
+          _ <- poll(limiter.failureRatio.map(ratio => assert(math.abs(ratio - 0.8) <= 0.1, clue = ratio)))
+          _ <- ratioRef.set(0.0)
+          _ <- poll(limiter.failureRatio.map(ratio => assert(ratio <= 0.05, clue = ratio)))
+        } yield ()
+      }
+    }
+  }
+
   private def startLimiter(config: Config = BaseConfig): Resource[IO, LimiterWithEffects] =
     for {
       categoryChanges <- Resource.eval(Queue.unbounded[IO, FailureState])
