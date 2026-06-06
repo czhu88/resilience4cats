@@ -61,7 +61,7 @@ object AdaptiveRateLimiter {
       def protectF[A](fa: F[A], isError: A => F[Boolean], orElse: => F[A])(implicit F: Monad[F]): F[A] =
         self.consume.flatMap { canProceed =>
           if (canProceed)
-            fa.flatTap(a => Applicative[F].ifF(isError(a))(ifTrue = self.recordFailure, ifFalse = self.recordSuccess))
+            fa.flatTap(a => isError(a).flatMap(if (_) self.recordFailure else self.recordSuccess))
           else orElse
         }
     }
