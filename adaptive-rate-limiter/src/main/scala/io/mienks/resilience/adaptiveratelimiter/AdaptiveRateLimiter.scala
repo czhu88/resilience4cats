@@ -429,7 +429,6 @@ object AdaptiveRateLimiter {
         rateIncreaseBy: AimdRateIncrease,
         multiplicativeDecrease: Double
     ): Pipe[F, FailureState, Rate] = { failureSignals =>
-      // TODO: don't need to tick if we are max rate and healthy
       val ticks = fs2.Stream.awakeEvery[F](period = rateIncreaseBy.tickInterval).as(Source.Tick)
 
       failureSignals
@@ -440,6 +439,7 @@ object AdaptiveRateLimiter {
           case (rate, Source.Signal(_))       => rate.scaleBy(multiplicativeDecrease).max(minRate)
           case (rate, Source.Tick)            => (rate + rateIncreaseBy.rate).min(maxRate)
         }
+        .changes
     }
   }
 
