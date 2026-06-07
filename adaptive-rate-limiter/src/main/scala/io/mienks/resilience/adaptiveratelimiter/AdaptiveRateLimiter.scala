@@ -96,7 +96,7 @@ object AdaptiveRateLimiter {
     *   interval at which the additive increase is applied
     * @param rateDecreaseBy
     *   multiplicative AIMD step in `[0, 1]`: on each [[FailureGradient.Worsening]] band crossed, the estimate is shrunk
-    *   to `(1 - rateDecrease) * current`
+    *   to `(1 - rateDecreaseBy) * current`
     * @param numberOfSlotsForMeasurements
     *   number of time-bucket slots in the failure-rate sliding window
     * @param slotDuration
