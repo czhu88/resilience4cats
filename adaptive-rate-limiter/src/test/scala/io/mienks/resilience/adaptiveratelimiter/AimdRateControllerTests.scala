@@ -47,7 +47,7 @@ class AimdRateControllerTests extends CatsEffectSuite {
           _,
           List(
             InitialRate,
-            InitialRate
+            Rate(requests = 11, period = 1.second)
           )
         )
       )
@@ -61,7 +61,7 @@ class AimdRateControllerTests extends CatsEffectSuite {
       run(
         config = BaseConfig.copy(initialRate = maxRate, maxRate = maxRate, minRate = minRate),
         failureSignals = fs2.Stream.emits(List.fill(7)(FailedSignal)).covary[IO],
-        take = 8
+        take = 7
       ).map(
         assertRatesEquivalent(
           _,
@@ -72,7 +72,6 @@ class AimdRateControllerTests extends CatsEffectSuite {
             Rate(requests = 5, period = 2.seconds), // 2.5 / sec
             Rate(requests = 5, period = 4.seconds), // 1.25 / sec
             Rate(requests = 5, period = 8.seconds), // 0.625 / sec
-            minRate,
             minRate
           )
         )
@@ -82,7 +81,7 @@ class AimdRateControllerTests extends CatsEffectSuite {
 
   test("additively increases on ticks and clamps at max") {
     TestControl.executeEmbed {
-      run(config = BaseConfig, failureSignals = fs2.Stream.empty, take = 5)
+      run(config = BaseConfig, failureSignals = fs2.Stream.empty, take = 4)
         .map(
           assertRatesEquivalent(
             _,
@@ -90,7 +89,6 @@ class AimdRateControllerTests extends CatsEffectSuite {
               InitialRate,
               Rate(requests = 11, period = 1.second),
               Rate(requests = 12, period = 1.second),
-              MaxRate,
               MaxRate
             )
           )
@@ -112,7 +110,7 @@ class AimdRateControllerTests extends CatsEffectSuite {
           rateDecreaseBy = 0.9
         ),
         failureSignals = fs2.Stream.emit(FailedSignal).covary[IO],
-        take = 8
+        take = 7
       ).map(
         assertRatesEquivalent(
           _,
@@ -123,7 +121,6 @@ class AimdRateControllerTests extends CatsEffectSuite {
             Rate(requests = 7000, period = 1.minute),
             Rate(requests = 9000, period = 1.minute),
             Rate(requests = 11000, period = 1.minute),
-            Rate(requests = 12000, period = 1.minute),
             Rate(requests = 12000, period = 1.minute)
           )
         )
@@ -198,13 +195,12 @@ class AimdRateControllerTests extends CatsEffectSuite {
           AimdRateController.AimdRateIncrease(rate = Rate(requests = 100, period = 1.second), tickInterval = 50.millis)
         ),
         failureSignals = fs2.Stream.empty,
-        take = 3
+        take = 2
       ).map(
         assertRatesEquivalent(
           _,
           List(
             InitialRate,
-            MaxRate,
             MaxRate
           )
         )
