@@ -13,7 +13,7 @@ import scala.concurrent.duration._
 /** Unit tests for [[AdaptiveRateLimiter.AimdRateController]]. */
 class AimdRateControllerTests extends CatsEffectSuite {
 
-  private val FailedSignal = Worsening(level = 0)
+  private val FailedSignal = Worsening(toLevel = 0)
 
   private val MinRate     = Rate(requests = 3, period = 1.second)
   private val MaxRate     = Rate(requests = 13, period = 1.second)
@@ -76,7 +76,7 @@ class AimdRateControllerTests extends CatsEffectSuite {
     TestControl.executeEmbed {
       run(
         config = BaseConfig,
-        failureSignals = fs2.Stream.emits(List(Worsening(level = 0), Worsening(level = 1))).covary[IO],
+        failureSignals = fs2.Stream.emits(List(Worsening(toLevel = 0), Worsening(toLevel = 1))).covary[IO],
         take = 3
       ).map(
         assertRatesEquivalent(

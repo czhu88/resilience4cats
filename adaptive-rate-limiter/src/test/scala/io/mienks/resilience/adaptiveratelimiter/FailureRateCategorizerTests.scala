@@ -77,33 +77,35 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
   }
 
   test("single band: above start and stays there -> Worsening(0)") {
-    runSingleBand(0.0, 0.6, 1.0, 1.0).map(assertEquals(_, List(Worsening(level = 0))))
+    runSingleBand(0.0, 0.6, 1.0, 1.0).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
   test("single band: above start then back into hysteresis band (no exit) -> Worsening(0)") {
-    runSingleBand(0.0, 0.6, 0.4).map(assertEquals(_, List(Worsening(level = 0))))
+    runSingleBand(0.0, 0.6, 0.4).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
   test("single band: above start and drifts higher to 100% -> Worsening(0)") {
-    runSingleBand(0.0, 0.6, 0.8, 1.0).map(assertEquals(_, List(Worsening(level = 0))))
+    runSingleBand(0.0, 0.6, 0.8, 1.0).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
   test("single band: above start, drifts higher, then back into hysteresis band -> Worsening(0)") {
-    runSingleBand(0.0, 0.6, 1.0, 0.4).map(assertEquals(_, List(Worsening(level = 0))))
+    runSingleBand(0.0, 0.6, 1.0, 0.4).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
   test("single band: above start, then below exit -> Worsening(0), Recovered") {
-    runSingleBand(0.0, 1.0, 0.0).map(assertEquals(_, List(Worsening(level = 0), Recovered)))
+    runSingleBand(0.0, 1.0, 0.0).map(assertEquals(_, List(Worsening(toLevel = 0), Recovered)))
   }
 
   test(
     "single band: above start, below exit, then back into hysteresis band (no re-enter) -> Worsening(0), Recovered"
   ) {
-    runSingleBand(0.0, 1.0, 0.0, 0.4).map(assertEquals(_, List(Worsening(level = 0), Recovered)))
+    runSingleBand(0.0, 1.0, 0.0, 0.4).map(assertEquals(_, List(Worsening(toLevel = 0), Recovered)))
   }
 
   test("single band: above start, below exit, then above start again -> Worsening(0), Recovered, Worsening(0)") {
-    runSingleBand(0.0, 1.0, 0.0, 0.6).map(assertEquals(_, List(Worsening(level = 0), Recovered, Worsening(level = 0))))
+    runSingleBand(0.0, 1.0, 0.0, 0.6).map(
+      assertEquals(_, List(Worsening(toLevel = 0), Recovered, Worsening(toLevel = 0)))
+    )
   }
 
   private val MultipleBands: NonEmptyList[HysteresisBand] = NonEmptyList.of(
@@ -124,35 +126,35 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
   }
 
   test("multiple bands: Healthy -> Worsening(0) only") {
-    runMultipleBands(0.0, 0.3).map(assertEquals(_, List(Worsening(level = 0))))
+    runMultipleBands(0.0, 0.3).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
   test("multiple bands: Healthy -> Worsening(0), Worsening(1)") {
-    runMultipleBands(0.0, 0.6).map(assertEquals(_, List(Worsening(level = 0), Worsening(level = 1))))
+    runMultipleBands(0.0, 0.6).map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1))))
   }
 
   test("multiple bands: Healthy -> Worsening(0), Worsening(1), Worsening(2)") {
     runMultipleBands(0.0, 0.9)
-      .map(assertEquals(_, List(Worsening(level = 0), Worsening(level = 1), Worsening(level = 2))))
+      .map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1), Worsening(toLevel = 2))))
   }
 
   test("multiple bands: Worsening(0) -> Worsening(1) retransition") {
-    runMultipleBands(0.0, 0.3, 0.6).map(assertEquals(_, List(Worsening(level = 0), Worsening(level = 1))))
+    runMultipleBands(0.0, 0.3, 0.6).map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1))))
   }
 
   test("multiple bands: Worsening(1) -> Worsening(2) retransition") {
     runMultipleBands(0.0, 0.6, 0.9)
-      .map(assertEquals(_, List(Worsening(level = 0), Worsening(level = 1), Worsening(level = 2))))
+      .map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1), Worsening(toLevel = 2))))
   }
 
   test("multiple bands: climbs band by band") {
     runMultipleBands(0.0, 0.3, 0.6, 0.9)
-      .map(assertEquals(_, List(Worsening(level = 0), Worsening(level = 1), Worsening(level = 2))))
+      .map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1), Worsening(toLevel = 2))))
   }
 
   test("multiple bands: drifts higher within top band -> Worsening(2)") {
     runMultipleBands(0.0, 0.9, 1.0)
-      .map(assertEquals(_, List(Worsening(level = 0), Worsening(level = 1), Worsening(level = 2))))
+      .map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1), Worsening(toLevel = 2))))
   }
 
   test("multiple bands: worsens then partially recovers -> Worsening(2), Recovering(2), Recovering(1)") {
@@ -161,9 +163,9 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
         assertEquals(
           _,
           List(
-            Worsening(level = 0),
-            Worsening(level = 1),
-            Worsening(level = 2),
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
             Recovering(fromLevel = 2),
             Recovering(fromLevel = 1)
           )
@@ -177,9 +179,9 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
         assertEquals(
           _,
           List(
-            Worsening(level = 0),
-            Worsening(level = 1),
-            Worsening(level = 2),
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
             Recovering(fromLevel = 2),
             Recovering(fromLevel = 1)
           )
@@ -193,9 +195,9 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
         assertEquals(
           _,
           List(
-            Worsening(level = 0),
-            Worsening(level = 1),
-            Worsening(level = 2),
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
             Recovering(fromLevel = 2),
             Recovering(fromLevel = 1),
             Recovered
@@ -210,9 +212,9 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
         assertEquals(
           _,
           List(
-            Worsening(level = 0),
-            Worsening(level = 1),
-            Worsening(level = 2),
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
             Recovering(fromLevel = 2),
             Recovering(fromLevel = 1),
             Recovered
@@ -227,15 +229,15 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
         assertEquals(
           _,
           List(
-            Worsening(level = 0),
-            Worsening(level = 1),
-            Worsening(level = 2),
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
             Recovering(fromLevel = 2),
             Recovering(fromLevel = 1),
             Recovered,
-            Worsening(level = 0),
-            Worsening(level = 1),
-            Worsening(level = 2)
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2)
           )
         )
       )
@@ -247,13 +249,13 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
         assertEquals(
           _,
           List(
-            Worsening(level = 0),
-            Worsening(level = 1),
-            Worsening(level = 2),
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
             Recovering(fromLevel = 2),
             Recovering(fromLevel = 1),
-            Worsening(level = 1),
-            Worsening(level = 2),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
             Recovering(fromLevel = 2),
             Recovering(fromLevel = 1)
           )

@@ -183,7 +183,7 @@ object AdaptiveRateLimiter {
 
   object FailureGradient {
 
-    final case class Worsening(level: Int) extends FailureGradient
+    final case class Worsening(toLevel: Int) extends FailureGradient
 
     final case class Recovering(fromLevel: Int) extends FailureGradient
 
@@ -295,6 +295,8 @@ object AdaptiveRateLimiter {
 
   private[adaptiveratelimiter] object FailureRateCategorizer {
 
+    private val NoChange = Chunk.empty[FailureGradient]
+
     private sealed abstract class FailureState extends Product with Serializable {
       def level: Int
     }
@@ -345,7 +347,6 @@ object AdaptiveRateLimiter {
       at `start` and releases at `exit`. Every state transition emits one [[FailureGradient]] event per band crossed.
        */
       val bandsArr = bands.toList.toArray // already sorted in validation above
-      val NoChange = Chunk.empty[FailureGradient]
 
       def worsening(currentLevel: Int, nextLevel: Int): Chunk[FailureGradient] =
         Chunk.from(((currentLevel + 1) to nextLevel).map(FailureGradient.Worsening(_)))
