@@ -35,16 +35,16 @@ class ApproximateFailureRatesTests extends CatsEffectSuite {
       // only errors
       _ <- measurements.recordFailure.replicateA_(4)
       _ <- waitForSampling
-      _ <- ratios.take.map(assertEquals(_, 1.0))
+      _ <- pollUntil(ratios)(ratio => assertEquals(ratio, 1.0))
 
       // mostly success
       _ <- measurements.recordSuccess.replicateA_(100)
       _ <- waitForSampling
-      _ <- ratios.take.map(r => assert(r <= 0.1, clue = r))
+      _ <- pollUntil(ratios)(ratio => assert(ratio <= 0.1, clue = ratio))
 
       // no change
       _ <- waitForSampling
-      _ <- ratios.take.map(r => assert(r <= 0.1, clue = r))
+      _ <- pollUntil(ratios)(ratio => assert(ratio <= 0.1, clue = ratio))
 
       // clear/waitForSampling until not enough measurements
       _ <- IO.sleep(BaseConfig.measurementWindow * 2)
@@ -57,7 +57,7 @@ class ApproximateFailureRatesTests extends CatsEffectSuite {
       _ <- measurements.recordSuccess.replicateA_(50)
       _ <- ratios.tryTakeN(maxN = None)
       _ <- waitForSampling
-      _ <- ratios.take.map(assertEquals(_, 0.5))
+      _ <- pollUntil(ratios)(ratio => assertEquals(ratio, 0.5))
 
       _ <- fiber.cancel
     } yield ()
@@ -80,4 +80,15 @@ class ApproximateFailureRatesTests extends CatsEffectSuite {
       val msg = result.left.toOption.fold("")(_.getMessage)
       assert(msg.contains(expectedMessage), clue = msg)
     }
+
+  private def pollUntil(ratios: Queue[IO, Double])(check: Double => Unit): IO[Unit] = {
+    val PollTimeout = 2.seconds
+
+    def loop: IO[Unit] =
+      ratios.take.flatMap { ratio =>
+        IO(check(ratio)).handleErrorWith(_ => loop)
+      }
+
+    loop.timeout(PollTimeout)
+  }
 }
