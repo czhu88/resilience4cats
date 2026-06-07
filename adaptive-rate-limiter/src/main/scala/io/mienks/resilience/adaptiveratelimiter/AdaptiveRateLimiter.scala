@@ -301,8 +301,12 @@ object AdaptiveRateLimiter {
 
     private object FailureState {
 
+      def apply(level: Int): FailureState =
+        if (level == Healthy.level) Healthy
+        else Failing(level)
+
       case object Healthy extends FailureState {
-        override val level: Int = -1
+        override val level: Int = -1 // aligns with not-found index from `array.lastIndexWhere`
       }
 
       final case class Failing(level: Int) extends FailureState
@@ -343,32 +347,36 @@ object AdaptiveRateLimiter {
       val bandsArr = bands.toList.toArray // already sorted in validation above
       val NoChange = Chunk.empty[FailureGradient]
 
-      _.scan((FailureState.Healthy: FailureState, NoChange)) { case ((state, _), failureRate) =>
-        val worseningLevel = bandsArr.lastIndexWhere(_.start <= failureRate)
-        val recoveryLevel  = bandsArr.lastIndexWhere(_.exit < failureRate)
-        val currentLevel   = state.level
+      def worsening(currentLevel: Int, nextLevel: Int): Chunk[FailureGradient] =
+        Chunk.from(((currentLevel + 1) to nextLevel).map(FailureGradient.Worsening(_)))
 
-        if (worseningLevel > currentLevel) // worsening
+      def recovering(currentLevel: Int, nextLevel: Int): Chunk[FailureGradient] =
+        Chunk.from((currentLevel until nextLevel by -1).map {
+          // Fully releasing band 0 means the backend is healthy again.
+          case 0     => FailureGradient.Recovered
+          case level => FailureGradient.Recovering(fromLevel = level)
+        })
+
+      _.scan((FailureState.Healthy: FailureState, NoChange)) { case ((current, _), failureRate) =>
+        val currentLevel = current.level
+
+        // Start thresholds engage bands; exit thresholds keep already-engaged bands retained during recovery.
+        val worseningTo  = bandsArr.lastIndexWhere(band => band.start <= failureRate)
+        val recoveringTo = bandsArr.lastIndexWhere(band => band.exit < failureRate)
+
+        if (worseningTo > currentLevel)
           (
-            FailureState.Failing(level = worseningLevel),
-            Chunk.from(
-              ((currentLevel + 1) to worseningLevel).map(FailureGradient.Worsening(_))
-            )
+            FailureState(level = worseningTo),
+            worsening(currentLevel = currentLevel, nextLevel = worseningTo)
           )
-        else if (recoveryLevel >= currentLevel)
-          (state, NoChange)
-        // recovering; recoveryLevel < currentLevel
-        else if (recoveryLevel == FailureState.Healthy.level)
+        // If the current level is no longer retained by its exit threshold, emit one recovery event per released band.
+        else if (recoveringTo < currentLevel)
           (
-            FailureState.Healthy,
-            Chunk.from((currentLevel until 0 by -1).map(FailureGradient.Recovering(_))) ++
-              Chunk(FailureGradient.Recovered)
+            FailureState(level = recoveringTo),
+            recovering(currentLevel = currentLevel, nextLevel = recoveringTo)
           )
         else
-          (
-            FailureState.Failing(level = recoveryLevel),
-            Chunk.from((currentLevel until recoveryLevel by -1).map(FailureGradient.Recovering(_)))
-          )
+          (current, NoChange)
       }.collect { case (_, gradients) => gradients }.unchunks
     }
 
