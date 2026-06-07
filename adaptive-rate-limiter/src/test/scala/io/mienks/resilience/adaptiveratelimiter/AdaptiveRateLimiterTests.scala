@@ -5,15 +5,15 @@ import cats.effect.std.Queue
 import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all._
 import io.mienks.resilience.Rate
-import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.FailureState._
-import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.{Config, FailureState, HysteresisBand}
+import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.FailureGradient._
+import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.{Config, FailureGradient, HysteresisBand}
 import munit.CatsEffectSuite
 
 import scala.concurrent.duration._
 
 private final case class LimiterWithEffects(
     limiter: AdaptiveRateLimiter[IO],
-    categoryChanges: Queue[IO, FailureState],
+    categoryChanges: Queue[IO, FailureGradient],
     minObservedRate: Ref[IO, Rate]
 )
 
@@ -63,7 +63,7 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
         ratio              <- limiter.failureRatio
         _                  <- IO(assertEquals(ratio, 0.0))
         category           <- categoryChanges.tryTake
-        _                  <- IO(assertEquals(category, none[FailureState]))
+        _                  <- IO(assertEquals(category, none[FailureGradient]))
         lowestObservedRate <- minObservedRate.get
         _                  <- IO(assert(lowestObservedRate === InitialRate, clue = lowestObservedRate))
       } yield ()
@@ -77,7 +77,7 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
         for {
           _                  <- assertRateConverges(limiter, MaxRate)
           category           <- categoryChanges.tryTake
-          _                  <- IO(assertEquals(category, none[FailureState]))
+          _                  <- IO(assertEquals(category, none[FailureGradient]))
           lowestObservedRate <- minObservedRate.get
           _                  <- IO(assert(lowestObservedRate === InitialRate, clue = lowestObservedRate))
           admitted           <- limiter.consume.replicateA(Capacity)
@@ -98,7 +98,7 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
           _                  <- hold(ratioRef, ratio = 0.2, duration = MeasurementWindow * 2)
           _                  <- assertRateConverges(limiter, MaxRate)
           category           <- categoryChanges.tryTake
-          _                  <- IO(assertEquals(category, none[FailureState]))
+          _                  <- IO(assertEquals(category, none[FailureGradient]))
           lowestObservedRate <- minObservedRate.get
           _                  <- IO(assert(lowestObservedRate === InitialRate, clue = lowestObservedRate))
         } yield ()
@@ -112,8 +112,8 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
         for {
           _ <- assertRateConverges(limiter, MaxRate)
           _ <- ratioRef.set(0.8)
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 0)))
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 1)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 0)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 1)))
           _ <- poll(
             minObservedRate.get.map { rate =>
               assert(rate < Rate(requests = 3, period = 1.second), clue = rate)
@@ -132,11 +132,12 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
           _ <- assertRateConverges(limiter, MaxRate)
           // degrade
           _ <- ratioRef.set(0.8)
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 0)))
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 1)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 0)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 1)))
           // recover
           _ <- ratioRef.set(0.0)
-          _ <- categoryChanges.take.map(state => assertEquals(state, Healthy))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Recovering(fromLevel = 1)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Recovered))
           _ <- assertRateConverges(limiter, MaxRate)
         } yield ()
       }
@@ -150,20 +151,19 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
           _ <- assertRateConverges(limiter, MaxRate)
           // a spike straight to the severe tier
           _ <- ratioRef.set(0.8)
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 0)))
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 1)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 0)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 1)))
           _ <- poll(minObservedRate.get.map(rate => assert(rate < Rate(requests = 3, period = 1.second), clue = rate)))
           rateAfterCut <- minObservedRate.get
           // recover gradually, lingering inside the hysteresis bands (above each exit)
-          _ <- hold(ratioRef, ratio = 0.5, duration = MeasurementWindow * 2) // still within band 1
-          _ <- hold(ratioRef, ratio = 0.2, duration = MeasurementWindow * 2) // demotes to band 0, but emits no signal
-          lingerSignal <- categoryChanges.tryTake
-          _ <- IO(assertEquals(lingerSignal, none[FailureState], clue = "lingering within the bands emits no signal"))
+          _                  <- hold(ratioRef, ratio = 0.5, duration = MeasurementWindow * 2) // still within band 1
+          _                  <- hold(ratioRef, ratio = 0.2, duration = MeasurementWindow * 2) // demotes to band 0
+          _                  <- categoryChanges.take.map(event => assertEquals(event, Recovering(fromLevel = 1)))
           rateWhileLingering <- minObservedRate.get
           _ <- IO(assert(rateWhileLingering === rateAfterCut, clue = "no fresh decrease is applied while recovering"))
-          // only a full clear below the exit band returns to Healthy
+          // only a full clear below the exit band returns to Recovered
           _ <- ratioRef.set(0.0)
-          _ <- categoryChanges.take.map(state => assertEquals(state, Healthy))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Recovered))
           _ <- assertRateConverges(limiter, MaxRate)
         } yield ()
       }
@@ -180,17 +180,19 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
           _ <- assertRateConverges(limiter, MaxRate)
           // moderate degradation trips only the first tier
           _            <- ratioRef.set(0.4)
-          _            <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 0)))
+          _            <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 0)))
           _            <- IO.sleep(MeasurementWindow * 2)
           noEscalation <- categoryChanges.tryTake
-          _ <- IO(assertEquals(noEscalation, none[FailureState], clue = "moderate errors do not trip the severe tier"))
+          _            <- IO(
+            assertEquals(noEscalation, none[FailureGradient], clue = "moderate errors do not trip the severe tier")
+          )
           _ <- poll(
             minObservedRate.get.map(rate => assert(rate === Rate(requests = 5, period = 1.second), clue = rate))
           )
           rateAfterFirstCut <- minObservedRate.get
           // severe degradation trips the second tier and compounds the rate cut
           _ <- ratioRef.set(0.8)
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 1)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 1)))
           _ <- poll(minObservedRate.get.map(rate => assert(rate < rateAfterFirstCut, clue = rate)))
           _ <- minObservedRate.get.map(rate => assert(rate > MinRate, clue = rate))
         } yield ()
@@ -239,20 +241,18 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
           _ <- assertRateConverges(limiter, config.initialRate)
           // spike straight to the most severe tier: promotes through every band and cuts three times
           _ <- ratioRef.set(0.95)
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 0)))
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 1)))
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 2)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 0)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 1)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 2)))
           _ <- poll(minObservedRate.get.map(rate => assert(rate < Rate(requests = 16, period = 1.second), clue = rate)))
           rateAfterFirstCuts <- minObservedRate.get
           // partial recovery into band 0 (Failing(2) -> Failing(0))
-          _              <- hold(ratioRef, ratio = 0.2, duration = MeasurementWindow * 2)
-          recoverySignal <- categoryChanges.tryTake
-          _              <- IO(
-            assertEquals(recoverySignal, none[FailureState], clue = "partial recovery within the bands emits no signal")
-          )
-          // re-degrade: re-emits Failing(1) (then Failing(2)) and compounds the cut
+          _ <- hold(ratioRef, ratio = 0.2, duration = MeasurementWindow * 2)
+          _ <- categoryChanges.take.map(event => assertEquals(event, Recovering(fromLevel = 2)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Recovering(fromLevel = 1)))
+          // re-degrade: re-emits Worsening(1) and compounds the cut
           _ <- ratioRef.set(0.95)
-          _ <- categoryChanges.take.map(state => assertEquals(state, Failing(level = 1)))
+          _ <- categoryChanges.take.map(event => assertEquals(event, Worsening(toLevel = 1)))
           _ <- poll(minObservedRate.get.map(rate => assert(rate < rateAfterFirstCuts, clue = rate)))
           _ <- minObservedRate.get.map(rate => assert(rate > MinRate, clue = rate))
         } yield ()
@@ -269,7 +269,7 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
         ratio              <- limiter.failureRatio
         _                  <- IO(assertEquals(ratio, 0.0))
         category           <- categoryChanges.tryTake
-        _                  <- IO(assertEquals(category, none[FailureState]))
+        _                  <- IO(assertEquals(category, none[FailureGradient]))
         lowestObservedRate <- minObservedRate.get
         _                  <- IO(assert(lowestObservedRate === InitialRate, clue = lowestObservedRate))
       } yield ()
@@ -292,11 +292,11 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
 
   private def startLimiter(config: Config = BaseConfig): Resource[IO, LimiterWithEffects] =
     for {
-      categoryChanges <- Resource.eval(Queue.unbounded[IO, FailureState])
+      categoryChanges <- Resource.eval(Queue.unbounded[IO, FailureGradient])
       minObservedRate <- Resource.eval(Ref[IO].of(config.initialRate))
       limiter         <- AdaptiveRateLimiter.start[IO](
         config = config,
-        onFailureCategoryChange = (state: FailureState) => categoryChanges.offer(state),
+        onFailureCategoryChange = (event: FailureGradient) => categoryChanges.offer(event),
         onRateChange = (rate: Rate) => minObservedRate.update(current => if (rate < current) rate else current)
       )
     } yield LimiterWithEffects(limiter = limiter, categoryChanges = categoryChanges, minObservedRate = minObservedRate)

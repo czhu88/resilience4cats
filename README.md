@@ -178,7 +178,7 @@ the underlying `DynamicRateLimiter` is always configured at that estimate.
 - `capacity` — maximum burst size of the underlying rate limiter
 - `initialRate` / `minRate` / `maxRate` — starting estimate and AIMD floor/ceiling
 - `rateIncreaseBy` / `rateIncreasePeriod` — additive increase step and tick interval
-- `rateDecreaseBy` — multiplicative decrease in `[0, 1]`; on a failing signal the estimate becomes `(1 - rateDecreaseBy) * current`
+- `rateDecreaseBy` — multiplicative decrease in `[0, 1]`; on each `FailureGradient.Worsening` band crossed the estimate becomes `(1 - rateDecreaseBy) * current`
 - `numberOfSlotsForMeasurements` / `slotDuration` — time-bucket slots in the failure-rate sliding window
 - `measurementPeriod` — how often the background fiber samples counters
 - `minNumberOfMeasurements` — minimum samples before a failure ratio is reported
@@ -196,13 +196,14 @@ Optional callbacks fire on control-loop events:
 ```scala
 AdaptiveRateLimiter.start[IO](
   config = config,
-  onFailureCategoryChange = (state: AdaptiveRateLimiter.FailureState) => IO.println(s"category: $state"),
+  onFailureCategoryChange = (event: AdaptiveRateLimiter.FailureGradient) => IO.println(s"gradient: $event"),
   onRateChange = (rate: Rate) => IO.println(s"rate: $rate"),
 )
 ```
 
-The categorizer reports `FailureState.Healthy` when the failure rate is below the least-severe band's `exit`, or
-`FailureState.Failing(n)` for severity tier `n` (zero-indexed; higher is worse).
+The categorizer emits `FailureGradient.Worsening(level)` (one event per band crossed on worsening),
+`FailureGradient.Recovering(fromLevel)` on partial recovery, and `FailureGradient.Recovered` on full recovery. The AIMD
+controller multiplicatively decreases only on `Worsening` and additively increases on a fixed tick.
 
 ## Circuit-Breaker
 The `circuit-breaker` models a concurrent state machine used to provide stability and prevent cascading failures in

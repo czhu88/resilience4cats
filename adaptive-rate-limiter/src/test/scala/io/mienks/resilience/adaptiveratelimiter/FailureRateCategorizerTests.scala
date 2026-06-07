@@ -3,24 +3,24 @@ package io.mienks.resilience.adaptiveratelimiter
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.syntax.all._
-import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.FailureState._
+import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.FailureGradient._
 import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.{
+  FailureGradient,
   FailureRateCategorizer,
-  FailureState,
   HysteresisBand
 }
 import munit.CatsEffectSuite
 
 class FailureRateCategorizerTests extends CatsEffectSuite {
 
-  /** Runs a timeseries of sampled failure rates and returns the throttle signals. */
-  private def runSingleBand(failureRates: Double*): IO[List[FailureState]] =
+  private def runSingleBand(failureRates: Double*): IO[List[FailureGradient]] =
     runWithBands(
       bands = NonEmptyList.one(HysteresisBand(exit = 0.2, start = 0.5)),
       failureRates = failureRates
     )
 
-  private def runWithBands(bands: NonEmptyList[HysteresisBand], failureRates: Seq[Double]): IO[List[FailureState]] =
+  /** Runs a timeseries of sampled failure rates and returns the failure-category signals. */
+  private def runWithBands(bands: NonEmptyList[HysteresisBand], failureRates: Seq[Double]): IO[List[FailureGradient]] =
     FailureRateCategorizer[IO](config = FailureRateCategorizer.Config(failureLevels = bands)).flatMap { categorizer =>
       fs2.Stream
         .emits(failureRates.toList)
@@ -69,103 +69,157 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
   }
 
   test("single band: stays at zero -> no signals") {
-    runSingleBand(0.0, 0.0, 0.0).map(assertEquals(_, List.empty[FailureState]))
+    runSingleBand(0.0, 0.0, 0.0).map(assertEquals(_, List.empty[FailureGradient]))
   }
 
   test("single band: hovers below start -> no signals") {
-    runSingleBand(0.0, 0.2, 0.4, 0.2, 0.0).map(assertEquals(_, List.empty[FailureState]))
+    runSingleBand(0.0, 0.2, 0.4, 0.2, 0.0).map(assertEquals(_, List.empty[FailureGradient]))
   }
 
-  test("single band: above start and stays there -> Failing(0)") {
-    runSingleBand(0.0, 0.6, 1.0, 1.0).map(assertEquals(_, List(Failing(level = 0))))
+  test("single band: above start and stays there -> Worsening(0)") {
+    runSingleBand(0.0, 0.6, 1.0, 1.0).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
-  test("single band: above start then back into hysteresis band (no exit) -> Failing(0)") {
-    runSingleBand(0.0, 0.6, 0.4).map(assertEquals(_, List(Failing(level = 0))))
+  test("single band: above start then back into hysteresis band (no exit) -> Worsening(0)") {
+    runSingleBand(0.0, 0.6, 0.4).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
-  test("single band: above start and drifts higher to 100% -> Failing(0)") {
-    runSingleBand(0.0, 0.6, 0.8, 1.0).map(assertEquals(_, List(Failing(level = 0))))
+  test("single band: above start and drifts higher to 100% -> Worsening(0)") {
+    runSingleBand(0.0, 0.6, 0.8, 1.0).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
-  test("single band: above start, drifts higher, then back into hysteresis band -> Failing(0)") {
-    runSingleBand(0.0, 0.6, 1.0, 0.4).map(assertEquals(_, List(Failing(level = 0))))
+  test("single band: above start, drifts higher, then back into hysteresis band -> Worsening(0)") {
+    runSingleBand(0.0, 0.6, 1.0, 0.4).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
-  test("single band: above start, then below exit -> Failing(0), Healthy") {
-    runSingleBand(0.0, 1.0, 0.0).map(assertEquals(_, List(Failing(level = 0), Healthy)))
+  test("single band: above start, then below exit -> Worsening(0), Recovered") {
+    runSingleBand(0.0, 1.0, 0.0).map(assertEquals(_, List(Worsening(toLevel = 0), Recovered)))
   }
 
-  test("single band: above start, below exit, then back into hysteresis band (no re-enter) -> Failing(0), Healthy") {
-    runSingleBand(0.0, 1.0, 0.0, 0.4).map(assertEquals(_, List(Failing(level = 0), Healthy)))
+  test(
+    "single band: above start, below exit, then back into hysteresis band (no re-enter) -> Worsening(0), Recovered"
+  ) {
+    runSingleBand(0.0, 1.0, 0.0, 0.4).map(assertEquals(_, List(Worsening(toLevel = 0), Recovered)))
   }
 
-  test("single band: above start, below exit, then above start again -> Failing(0), Healthy, Failing(0)") {
-    runSingleBand(0.0, 1.0, 0.0, 0.6).map(assertEquals(_, List(Failing(level = 0), Healthy, Failing(level = 0))))
+  test("single band: above start, below exit, then above start again -> Worsening(0), Recovered, Worsening(0)") {
+    runSingleBand(0.0, 1.0, 0.0, 0.6).map(
+      assertEquals(_, List(Worsening(toLevel = 0), Recovered, Worsening(toLevel = 0)))
+    )
   }
 
-  /*
-  Three-band detector. Band thresholds are chosen with a clear gap between each band's `start` and the next band's
-  `exit`, so each sample maps to at most one transition. Recovery only emits a signal on the final demotion to `Healthy`.
-   */
   private val MultipleBands: NonEmptyList[HysteresisBand] = NonEmptyList.of(
     HysteresisBand(exit = 0.1, start = 0.3),
     HysteresisBand(exit = 0.4, start = 0.6),
     HysteresisBand(exit = 0.7, start = 0.9)
   )
 
-  private def runMultipleBands(failureRates: Double*): IO[List[FailureState]] =
+  private def runMultipleBands(failureRates: Double*): IO[List[FailureGradient]] =
     runWithBands(bands = MultipleBands, failureRates = failureRates)
 
   test("multiple bands: stays at zero -> no signals") {
-    runMultipleBands(0.0, 0.0).map(assertEquals(_, List.empty[FailureState]))
+    runMultipleBands(0.0, 0.0).map(assertEquals(_, List.empty[FailureGradient]))
   }
 
   test("multiple bands: hovers below band 0 start -> no signals") {
-    runMultipleBands(0.0, 0.1, 0.2, 0.1, 0.0).map(assertEquals(_, List.empty[FailureState]))
+    runMultipleBands(0.0, 0.1, 0.2, 0.1, 0.0).map(assertEquals(_, List.empty[FailureGradient]))
   }
 
-  test("multiple bands: Healthy -> Failing(0) only") {
-    runMultipleBands(0.0, 0.3).map(assertEquals(_, List(Failing(level = 0))))
+  test("multiple bands: Healthy -> Worsening(0) only") {
+    runMultipleBands(0.0, 0.3).map(assertEquals(_, List(Worsening(toLevel = 0))))
   }
 
-  test("multiple bands: Healthy -> Failing(0), Failing(1)") {
-    runMultipleBands(0.0, 0.6).map(assertEquals(_, List(Failing(level = 0), Failing(level = 1))))
+  test("multiple bands: Healthy -> Worsening(0), Worsening(1)") {
+    runMultipleBands(0.0, 0.6).map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1))))
   }
 
-  test("multiple bands: Healthy -> Failing(0), Failing(1), Failing(2)") {
+  test("multiple bands: Healthy -> Worsening(0), Worsening(1), Worsening(2)") {
     runMultipleBands(0.0, 0.9)
-      .map(assertEquals(_, List(Failing(level = 0), Failing(level = 1), Failing(level = 2))))
+      .map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1), Worsening(toLevel = 2))))
   }
 
-  test("multiple bands: Failing(0) -> Failing(1) retransition") {
-    runMultipleBands(0.0, 0.3, 0.6).map(assertEquals(_, List(Failing(level = 0), Failing(level = 1))))
+  test("multiple bands: Worsening(0) -> Worsening(1) retransition") {
+    runMultipleBands(0.0, 0.3, 0.6).map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1))))
   }
 
-  test("multiple bands: Failing(1) -> Failing(2) retransition") {
+  test("multiple bands: Worsening(1) -> Worsening(2) retransition") {
     runMultipleBands(0.0, 0.6, 0.9)
-      .map(assertEquals(_, List(Failing(level = 0), Failing(level = 1), Failing(level = 2))))
+      .map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1), Worsening(toLevel = 2))))
   }
 
   test("multiple bands: climbs band by band") {
     runMultipleBands(0.0, 0.3, 0.6, 0.9)
-      .map(assertEquals(_, List(Failing(level = 0), Failing(level = 1), Failing(level = 2))))
+      .map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1), Worsening(toLevel = 2))))
   }
 
-  test("multiple bands: drifts higher within top band -> Failing(2)") {
+  test("multiple bands: drifts higher within top band -> Worsening(2)") {
     runMultipleBands(0.0, 0.9, 1.0)
-      .map(assertEquals(_, List(Failing(level = 0), Failing(level = 1), Failing(level = 2))))
+      .map(assertEquals(_, List(Worsening(toLevel = 0), Worsening(toLevel = 1), Worsening(toLevel = 2))))
   }
 
-  test("multiple bands: worsens then partially recovers (no Healthy emission) -> Failing(2)") {
+  test("multiple bands: worsens then partially recovers -> Worsening(2), Recovering(2), Recovering(1)") {
     runMultipleBands(0.0, 0.9, 0.5, 0.2)
-      .map(assertEquals(_, List(Failing(level = 0), Failing(level = 1), Failing(level = 2))))
+      .map(
+        assertEquals(
+          _,
+          List(
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
+            Recovering(fromLevel = 2),
+            Recovering(fromLevel = 1)
+          )
+        )
+      )
   }
 
-  test("multiple bands: full recovery from top band -> Failing(2), Healthy") {
+  test("multiple bands: recovery target uses exit thresholds") {
+    runMultipleBands(0.91, 0.95, 0.8, 0.7, 0.2)
+      .map(
+        assertEquals(
+          _,
+          List(
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
+            Recovering(fromLevel = 2),
+            Recovering(fromLevel = 1)
+          )
+        )
+      )
+  }
+
+  test("multiple bands: full recovery from top band") {
     runMultipleBands(0.0, 0.9, 0.5, 0.2, 0.0)
       .map(
-        assertEquals(_, List(Failing(level = 0), Failing(level = 1), Failing(level = 2), Healthy))
+        assertEquals(
+          _,
+          List(
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
+            Recovering(fromLevel = 2),
+            Recovering(fromLevel = 1),
+            Recovered
+          )
+        )
+      )
+  }
+
+  test("multiple bands: quick recovery from top band") {
+    runMultipleBands(0.0, 0.9, 0.0)
+      .map(
+        assertEquals(
+          _,
+          List(
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
+            Recovering(fromLevel = 2),
+            Recovering(fromLevel = 1),
+            Recovered
+          )
+        )
       )
   }
 
@@ -175,29 +229,35 @@ class FailureRateCategorizerTests extends CatsEffectSuite {
         assertEquals(
           _,
           List(
-            Failing(level = 0),
-            Failing(level = 1),
-            Failing(level = 2),
-            Healthy,
-            Failing(level = 0),
-            Failing(level = 1),
-            Failing(level = 2)
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
+            Recovering(fromLevel = 2),
+            Recovering(fromLevel = 1),
+            Recovered,
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2)
           )
         )
       )
   }
 
-  test("multiple bands: re-enters Failing(1) and Failing(2) after partial recovery") {
+  test("multiple bands: re-enters Worsening(1) and Worsening(2) after partial recovery") {
     runMultipleBands(0.0, 0.3, 0.6, 0.9, 0.6, 0.3, 0.6, 0.9, 0.6, 0.3)
       .map(
         assertEquals(
           _,
           List(
-            Failing(level = 0),
-            Failing(level = 1),
-            Failing(level = 2),
-            Failing(level = 1),
-            Failing(level = 2)
+            Worsening(toLevel = 0),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
+            Recovering(fromLevel = 2),
+            Recovering(fromLevel = 1),
+            Worsening(toLevel = 1),
+            Worsening(toLevel = 2),
+            Recovering(fromLevel = 2),
+            Recovering(fromLevel = 1)
           )
         )
       )

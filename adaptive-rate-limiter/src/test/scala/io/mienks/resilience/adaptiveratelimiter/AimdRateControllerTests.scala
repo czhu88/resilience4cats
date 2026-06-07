@@ -4,8 +4,8 @@ import cats.effect.IO
 import cats.effect.testkit.TestControl
 import cats.syntax.all._
 import io.mienks.resilience.Rate
-import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.FailureState._
-import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.{AimdRateController, FailureState}
+import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.FailureGradient._
+import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.{AimdRateController, FailureGradient}
 import munit.CatsEffectSuite
 
 import scala.concurrent.duration._
@@ -13,7 +13,7 @@ import scala.concurrent.duration._
 /** Unit tests for [[AdaptiveRateLimiter.AimdRateController]]. */
 class AimdRateControllerTests extends CatsEffectSuite {
 
-  private val FailedSignal = Failing(level = 0)
+  private val FailedSignal = Worsening(toLevel = 0)
 
   private val MinRate     = Rate(requests = 3, period = 1.second)
   private val MaxRate     = Rate(requests = 13, period = 1.second)
@@ -36,11 +36,11 @@ class AimdRateControllerTests extends CatsEffectSuite {
     }
   }
 
-  test("ignores Healthy signals") {
+  test("ignores Recovered signals") {
     TestControl.executeEmbed {
       run(
         config = BaseConfig,
-        failureSignals = fs2.Stream(Healthy).covary[IO],
+        failureSignals = fs2.Stream(Recovered).covary[IO],
         take = 2
       ).map(
         assertRatesEquivalent(
@@ -48,6 +48,43 @@ class AimdRateControllerTests extends CatsEffectSuite {
           List(
             InitialRate,
             Rate(requests = 11, period = 1.second)
+          )
+        )
+      )
+    }
+  }
+
+  test("ignores Recovering signals") {
+    TestControl.executeEmbed {
+      run(
+        config = BaseConfig,
+        failureSignals = fs2.Stream(Recovering(fromLevel = 1)).covary[IO],
+        take = 2
+      ).map(
+        assertRatesEquivalent(
+          _,
+          List(
+            InitialRate,
+            Rate(requests = 11, period = 1.second)
+          )
+        )
+      )
+    }
+  }
+
+  test("applies one decrease per Worsening band crossed") {
+    TestControl.executeEmbed {
+      run(
+        config = BaseConfig,
+        failureSignals = fs2.Stream.emits(List(Worsening(toLevel = 0), Worsening(toLevel = 1))).covary[IO],
+        take = 3
+      ).map(
+        assertRatesEquivalent(
+          _,
+          List(
+            InitialRate,
+            Rate(requests = 5, period = 1.second),
+            MinRate
           )
         )
       )
@@ -254,7 +291,7 @@ class AimdRateControllerTests extends CatsEffectSuite {
 
   private def run(
       config: AimdRateController.Config,
-      failureSignals: fs2.Stream[IO, FailureState],
+      failureSignals: fs2.Stream[IO, FailureGradient],
       take: Long
   ): IO[List[Rate]] =
     AdaptiveRateLimiter.AimdRateController[IO](config = config).flatMap { controller =>
