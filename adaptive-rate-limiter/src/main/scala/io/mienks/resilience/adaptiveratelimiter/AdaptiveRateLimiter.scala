@@ -2,7 +2,6 @@ package io.mienks.resilience.adaptiveratelimiter
 
 import cats.data.NonEmptyList
 import cats.effect.{Async, Ref, Resource, Spawn, Sync, Temporal}
-import cats.kernel.Eq
 import cats.syntax.all._
 import cats.{Applicative, ApplicativeThrow, Monad}
 import fs2.{Chunk, Pipe}
@@ -16,9 +15,9 @@ import scala.concurrent.duration._
   * Decrease) control loop reacting to observed failure rates.
   *
   * Outcomes are recorded with [[recordSuccess]] / [[recordFailure]] on a hot path (cheap, lock-free), then sampled on a
-  * background fiber. The categorizer applies hysteresis bands to avoid flapping. The AIMD loop additively grows the
-  * estimated rate on a fixed time tick and multiplicatively shrinks it when the failure-rate categorizer reports a
-  * worsening signal.
+  * background fiber. The categorizer applies hysteresis bands to avoid flapping and emits [[FailureGradient]] events.
+  * The AIMD loop additively grows the estimated rate on a fixed time tick and multiplicatively shrinks it on
+  * [[FailureGradient.Worsening]].
   */
 trait AdaptiveRateLimiter[F[_]] {
 
@@ -41,8 +40,6 @@ trait AdaptiveRateLimiter[F[_]] {
 }
 
 object AdaptiveRateLimiter {
-
-  import FailureState._
 
   object syntax {
 
@@ -98,8 +95,8 @@ object AdaptiveRateLimiter {
     * @param rateIncreasePeriod
     *   interval at which the additive increase is applied
     * @param rateDecreaseBy
-    *   multiplicative AIMD step in `[0, 1]`: on a `Failing` signal, the estimate is shrunk to `(1 - rateDecrease) *
-    *   current`
+    *   multiplicative AIMD step in `[0, 1]`: on each [[FailureGradient.Worsening]] band crossed, the estimate is shrunk
+    *   to `(1 - rateDecrease) * current`
     * @param numberOfSlotsForMeasurements
     *   number of time-bucket slots in the failure-rate sliding window
     * @param slotDuration
@@ -181,26 +178,17 @@ object AdaptiveRateLimiter {
       )
   }
 
-  /** The categorizer's output. `Healthy` means the failure rate is below the least-severe band's `exit`. `Failing(N)`
-    * means severity tier `N` (zero-indexed; higher is worse).
-    */
-  sealed abstract class FailureState extends Product with Serializable {
-    def level: Int
+  /** Control-loop events emitted by the failure-rate categorizer. */
+  sealed trait FailureGradient
+
+  object FailureGradient {
+
+    final case class Worsening(level: Int) extends FailureGradient
+
+    final case class Recovering(fromLevel: Int) extends FailureGradient
+
+    case object Recovered extends FailureGradient
   }
-
-  object FailureState {
-
-    case object Healthy extends FailureState {
-      override val level: Int = -1
-    }
-
-    final case class Failing(level: Int) extends FailureState
-
-    implicit val eq: Eq[FailureState] = Eq.fromUniversalEquals
-  }
-
-  private val NoSignal      = Chunk.empty[FailureState]
-  private val HealthySignal = Chunk[FailureState](FailureState.Healthy)
 
   /** A no-op limiter that always allows consumption, never records outcomes, and reports a fixed sustainable rate. */
   def noop[F[_]: Applicative](rate: Rate = Rate(requests = 1, period = 1.second)): AdaptiveRateLimiter[F] =
@@ -225,18 +213,18 @@ object AdaptiveRateLimiter {
   def start[F[_]: Async](config: Config): Resource[F, AdaptiveRateLimiter[F]] =
     start[F](
       config = config,
-      onFailureCategoryChange = (_: FailureState) => Async[F].unit,
+      onFailureCategoryChange = (_: FailureGradient) => Async[F].unit,
       onRateChange = (_: Rate) => Async[F].unit
     )
 
   /** @param onFailureCategoryChange
-    *   callback fired whenever the categorizer promotes or demotes the failure tier
+    *   callback fired on each [[FailureGradient]] event (per band crossed on worsening or recovery)
     * @param onRateChange
     *   callback fired whenever the AIMD updates its estimated rate for the protected sink
     */
   def start[F[_]: Async](
       config: Config,
-      onFailureCategoryChange: FailureState => F[Unit],
+      onFailureCategoryChange: FailureGradient => F[Unit],
       onRateChange: Rate => F[Unit]
   ): Resource[F, AdaptiveRateLimiter[F]] =
     for {
@@ -306,6 +294,20 @@ object AdaptiveRateLimiter {
   }
 
   private[adaptiveratelimiter] object FailureRateCategorizer {
+
+    private sealed abstract class FailureState extends Product with Serializable {
+      def level: Int
+    }
+
+    private object FailureState {
+
+      case object Healthy extends FailureState {
+        override val level: Int = -1
+      }
+
+      final case class Failing(level: Int) extends FailureState
+    }
+
     final case class Config(failureLevels: NonEmptyList[HysteresisBand]) {
       def validate: Either[String, Unit] =
         for {
@@ -326,48 +328,48 @@ object AdaptiveRateLimiter {
         } yield ()
     }
 
-    def apply[F[_]: ApplicativeThrow](config: Config): F[Pipe[F, Double, FailureState]] =
+    def apply[F[_]: ApplicativeThrow](config: Config): F[Pipe[F, Double, FailureGradient]] =
       for {
         _ <- ApplicativeThrow[F].fromEither(config.validate.leftMap(new IllegalArgumentException(_)))
       } yield failureRateCategorizer(bands = config.failureLevels)
 
     private def failureRateCategorizer[F[_]](
         bands: NonEmptyList[HysteresisBand]
-    ): Pipe[F, Double, FailureState] = {
+    ): Pipe[F, Double, FailureGradient] = {
       /*
-      Avoid flapping around a single point and keep the output signal stable while the system adjusts to new rates.
-      Producing too many unnecessary throttle signals would apply the multiplicative decrease each time, crushing
-      throughput.
-  
-      Bands are ordered least-severe first (band 0 is the least severe). Promotions emit one signal per band crossed
-      so consumers can step their AIMD response per tier. Demotions step one band at a time when the rate falls at or
-      below the current band's `exit`, and only emit a signal on the final demotion to `Healthy`.
+      Bands are ordered least-severe first (band 0 is the least severe). Hysteresis prevents flapping: a band engages
+      at `start` and releases at `exit`. Every state transition emits one [[FailureGradient]] event per band crossed.
        */
-      val bandsArr = bands.toList.toArray
+      val bandsArr = bands.toList.toArray // already sorted in validation above
+      val NoChange = Chunk.empty[FailureGradient]
 
-      // TODO: this would be cleaner if it just emits state, then rate controller can track gradient.
-      _.scan[(FailureState, Chunk[FailureState])]((FailureState.Healthy, NoSignal)) { case ((current, _), rate) =>
-        val nextLevel    = bandsArr.lastIndexWhere(_.start <= rate)
-        val currentLevel = current.level
+      _.scan((FailureState.Healthy: FailureState, NoChange)) { case ((state, _), failureRate) =>
+        val worseningLevel = bandsArr.lastIndexWhere(_.start <= failureRate)
+        val recoveryLevel  = bandsArr.lastIndexWhere(_.exit < failureRate)
+        val currentLevel   = state.level
 
-        if (nextLevel > currentLevel) // worsening
+        if (worseningLevel > currentLevel) // worsening
           (
-            FailureState.Failing(level = nextLevel),
+            FailureState.Failing(level = worseningLevel),
             Chunk.from(
-              (1 to nextLevel - currentLevel).map(step => FailureState.Failing(level = currentLevel + step))
+              ((currentLevel + 1) to worseningLevel).map(FailureGradient.Worsening(_))
             )
           )
+        else if (recoveryLevel >= currentLevel)
+          (state, NoChange)
+        // recovering; recoveryLevel < currentLevel
+        else if (recoveryLevel == FailureState.Healthy.level)
+          (
+            FailureState.Healthy,
+            Chunk.from((currentLevel until 0 by -1).map(FailureGradient.Recovering(_))) ++
+              Chunk(FailureGradient.Recovered)
+          )
         else
-          current match {
-            case FailureState.Failing(level) if rate <= bandsArr(level).exit =>
-              // full recovery
-              if (level == 0) (FailureState.Healthy, HealthySignal)
-              // recovering
-              else (FailureState.Failing(level = level - 1), NoSignal)
-            // same or still within the hysteresis band
-            case _ => (current, NoSignal)
-          }
-      }.collect { case (_, signals) => signals }.unchunks.changes
+          (
+            FailureState.Failing(level = recoveryLevel),
+            Chunk.from((currentLevel until recoveryLevel by -1).map(FailureGradient.Recovering(_)))
+          )
+      }.collect { case (_, gradients) => gradients }.unchunks
     }
 
   }
@@ -384,16 +386,11 @@ object AdaptiveRateLimiter {
         rateDecreaseBy: Double
     )
 
-    private sealed abstract class Source extends Product with Serializable
-
-    private object Source {
-      case object Tick                                    extends Source
-      final case class Signal(failureState: FailureState) extends Source
-    }
+    private case object Tick
 
     private[adaptiveratelimiter] def apply[F[_]: Temporal](
         config: AimdRateController.Config
-    ): F[Pipe[F, FailureState, Rate]] =
+    ): F[Pipe[F, FailureGradient, Rate]] =
       ApplicativeThrow[F]
         .fromEither {
           import config._
@@ -428,16 +425,22 @@ object AdaptiveRateLimiter {
         maxRate: Rate,
         rateIncreaseBy: AimdRateIncrease,
         multiplicativeDecrease: Double
-    ): Pipe[F, FailureState, Rate] = { failureSignals =>
-      val ticks = fs2.Stream.awakeEvery[F](period = rateIncreaseBy.tickInterval).as(Source.Tick)
+    ): Pipe[F, FailureGradient, Rate] = { failureSignals =>
+      val ticks =
+        fs2.Stream
+          .awakeEvery[F](period = rateIncreaseBy.tickInterval)
+          .map(_ => Tick.asLeft[FailureGradient])
 
       failureSignals
-        .map(Source.Signal(_))
+        .map(_.asRight[Tick.type])
         .merge(ticks)
         .scan(initialRate) {
-          case (rate, Source.Signal(Healthy)) => rate
-          case (rate, Source.Signal(_))       => rate.scaleBy(multiplicativeDecrease).max(minRate)
-          case (rate, Source.Tick)            => (rate + rateIncreaseBy.rate).min(maxRate)
+          case (rate, Right(FailureGradient.Worsening(_))) =>
+            rate.scaleBy(multiplicativeDecrease).max(minRate)
+          case (rate, Right(_)) =>
+            rate
+          case (rate, Left(Tick)) =>
+            (rate + rateIncreaseBy.rate).min(maxRate)
         }
         .changes
     }
