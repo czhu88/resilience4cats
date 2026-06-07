@@ -1,0 +1,8 @@
+elapsed_ms,kind,detail
+2,rate_change,10.0
+833,worsening,0
+837,rate_change,5.0
+1010,rate_change,7.0
+1834,worsening,1
+1845,rate_change,3.5
+2009,rate_change,5.5

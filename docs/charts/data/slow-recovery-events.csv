@@ -1,0 +1,13 @@
+elapsed_ms,kind,detail
+4,rate_change,10.0
+959,worsening,0
+962,rate_change,5.0
+968,rate_change,7.0
+1008,rate_change,9.0
+1036,worsening,1
+1038,rate_change,4.5
+1048,rate_change,6.5
+1087,rate_change,8.5
+1130,rate_change,10.0
+2158,recovering,1
+2784,recovered,

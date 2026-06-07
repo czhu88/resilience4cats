@@ -1,0 +1,7 @@
+scenario,description,samples_file,events_file
+healthy-climb,Healthy backend: the AIMD estimate climbs additively to maxRate and stays there.,healthy-climb-samples.csv,healthy-climb-events.csv
+quick-degradation,A failure spike promotes through both bands and multiplicatively cuts the rate.,quick-degradation-samples.csv,quick-degradation-events.csv
+degrade-then-recover,"After a spike and rate cut, a recovered backend returns to Healthy and climbs back to max.",degrade-then-recover-samples.csv,degrade-then-recover-events.csv
+slow-recovery,Errors clearing gradually hold the failing tier (hysteresis) until fully below the exit band.,slow-recovery-samples.csv,slow-recovery-events.csv
+flapping,Repeated degrade/recover cycles ratchet the rate down toward the min floor.,flapping-samples.csv,flapping-events.csv
+slow-degradation,"Rising errors trip the bands one tier at a time, compounding the rate cut.",slow-degradation-samples.csv,slow-degradation-events.csv

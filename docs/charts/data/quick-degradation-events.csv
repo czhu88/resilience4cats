@@ -1,0 +1,14 @@
+elapsed_ms,kind,detail
+9,rate_change,2.0
+79,rate_change,4.0
+110,rate_change,6.0
+151,rate_change,8.0
+194,rate_change,10.0
+1403,worsening,0
+1409,rate_change,5.0
+1412,rate_change,2.5
+1412,worsening,1
+1432,rate_change,4.5
+1472,rate_change,6.5
+1510,rate_change,8.5
+1554,rate_change,10.0
