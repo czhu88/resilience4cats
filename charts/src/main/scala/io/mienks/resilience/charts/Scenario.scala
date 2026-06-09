@@ -6,11 +6,6 @@ import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.{Config, Hys
 
 import scala.concurrent.duration._
 
-/** One leg of a scenario: hold the simulated backend's base capacity at `capacity` for `duration`. A lower capacity is
-  * a degraded backend; raising it again is recovery.
-  */
-final case class Segment(capacity: Rate, duration: FiniteDuration)
-
 /** A closed-loop run against an [[io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter]]: a workload offers
   * load through the limiter to a [[Backend]] whose capacity follows `segments`, and failures emerge from the limiter
   * over-driving that capacity.
@@ -34,7 +29,7 @@ final case class Scenario(
     config: Config,
     backendTiers: NonEmptyList[Backend.Tier],
     warmup: FiniteDuration,
-    segments: List[Segment]
+    segments: List[Scenario.Segment]
 )
 
 object Scenario {
@@ -73,17 +68,7 @@ object Scenario {
   // A capacity comfortably above maxRate keeps the backend healthy (no overload), so the rate plateaus at max.
   private val Healthy: Rate = rps(500)
 
-  val library: List[Scenario] = List(
-    congestionSawtooth,
-    quickDegradation,
-    degradeThenRecover,
-    slowRecovery,
-    flapping,
-    slowDegradation,
-    gradedDegradation
-  )
-
-  private def congestionSawtooth: Scenario =
+  private val congestionSawtooth: Scenario =
     Scenario(
       name = "congestion-sawtooth",
       description = "Constant backend capacity below maxRate: AIMD oscillates around it in the classic TCP sawtooth.",
@@ -93,7 +78,7 @@ object Scenario {
       segments = List(Segment(capacity = rps(200), duration = 7.seconds))
     )
 
-  private def quickDegradation: Scenario =
+  private val quickDegradation: Scenario =
     Scenario(
       name = "quick-degradation",
       description = "A sudden capacity drop trips a band and cuts the rate into a lower sawtooth around the capacity.",
@@ -106,7 +91,7 @@ object Scenario {
       )
     )
 
-  private def degradeThenRecover: Scenario =
+  private val degradeThenRecover: Scenario =
     Scenario(
       name = "degrade-then-recover",
       description = "After a capacity collapse and rate cut, restored capacity returns the backend to healthy and max.",
@@ -120,7 +105,7 @@ object Scenario {
       )
     )
 
-  private def slowRecovery: Scenario =
+  private val slowRecovery: Scenario =
     Scenario(
       name = "slow-recovery",
       description = "Capacity recovers in steps; the limiter climbs back to a higher safe rate at each step.",
@@ -136,7 +121,7 @@ object Scenario {
       )
     )
 
-  private def flapping: Scenario =
+  private val flapping: Scenario =
     Scenario(
       name = "flapping",
       description = "Capacity flaps between healthy and degraded: compounding cuts ratchet the rate toward the floor.",
@@ -154,7 +139,7 @@ object Scenario {
         .flatten
     )
 
-  private def slowDegradation: Scenario =
+  private val slowDegradation: Scenario =
     Scenario(
       name = "slow-degradation",
       description = "Capacity steps down gradually; the limiter re-discovers a lower safe rate at each step.",
@@ -168,7 +153,7 @@ object Scenario {
       )
     )
 
-  private def gradedDegradation: Scenario =
+  private val gradedDegradation: Scenario =
     Scenario(
       name = "graded-degradation",
       description = "A two-tier backend (soft + hard ceiling) produces two distinct failure levels across the bands.",
@@ -185,4 +170,19 @@ object Scenario {
         Segment(capacity = Healthy, duration = 4.seconds)  // restored: the backend recovers and the rate climbs back
       )
     )
+
+  val all: List[Scenario] = List(
+    congestionSawtooth,
+    quickDegradation,
+    degradeThenRecover,
+    slowRecovery,
+    flapping,
+    slowDegradation,
+    gradedDegradation
+  )
+
+  /** One leg of a scenario: hold the simulated backend's base capacity at `capacity` for `duration`. A lower capacity
+    * is a degraded backend; raising it again is recovery.
+    */
+  final case class Segment(capacity: Rate, duration: FiniteDuration)
 }

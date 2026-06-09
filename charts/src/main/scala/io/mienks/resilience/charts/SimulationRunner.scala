@@ -10,39 +10,12 @@ import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.syntax._
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration._
 
-/** One sampled point of a closed-loop run.
-  *
-  * @param aimdRps
-  *   the AIMD's current rate estimate (the controlled variable)
-  * @param admittedRps
-  *   the measured throughput the limiter actually admitted over the last sample interval
-  * @param backendCapacityRps
-  *   the backend's current sustainable capacity (the bottleneck the AIMD is trying to discover)
-  * @param observedFailureRatio
-  *   the limiter's sampled failure ratio in `[0, 1]`
-  */
-final case class Sample(
-    elapsedMillis: Long,
-    aimdRps: Double,
-    admittedRps: Double,
-    backendCapacityRps: Double,
-    observedFailureRatio: Double
-)
-
-/** Everything a chart needs for one scenario: the dense sampled timeseries plus the discrete control-loop events. */
-final case class RunResult(
-    scenario: Scenario,
-    samples: Vector[Sample],
-    rateEvents: Vector[(Long, Double)],
-    gradientEvents: Vector[(Long, FailureGradient)]
-)
-
 object SimulationRunner {
 
-  // Several offer fibers, each attempting roughly every OfferInterval, so the offered load comfortably exceeds maxRate
+  // Number of client fibers hitting the backend roughly every ClientInterval. The offered load comfortably exceeds maxRate
   // and the admitted rate tracks the limiter's current refill rate.
-  private val OfferWorkers: Int             = 4
-  private val OfferInterval: FiniteDuration = 1.millis
+  private val NumberOfClients: Int           = 4
+  private val ClientInterval: FiniteDuration = 1.millis
 
   // Sampled finer than the slot duration so band crossings and rate cuts are visible in the timeseries.
   private val SamplePeriod: FiniteDuration = 50.millis
@@ -50,7 +23,7 @@ object SimulationRunner {
   // Fixed seed keeps the graded backend's probabilistic failures reproducible across runs.
   private val Seed: Long = 42L
 
-  def run(scenario: Scenario): IO[RunResult] =
+  def run(scenario: Scenario): IO[Result] =
     for {
       samplesRef        <- Ref[IO].of(Vector.empty[Sample])
       rateEventsRef     <- Ref[IO].of(Vector.empty[(Long, Double)])
@@ -70,12 +43,12 @@ object SimulationRunner {
           onRateChange = (rate: Rate) => elapsedMillis.flatMap(ms => rateEventsRef.update(_ :+ (ms, toRps(rate))))
         )
         .use { limiter =>
-          val offer =
+          val callBackend =
             limiter.protect(
               fa = admittedRef.update(_ + 1L) >> backend.call,
               isError = (ok: Boolean) => !ok,
               orElse = true
-            ) >> IO.sleep(OfferInterval)
+            ) >> IO.sleep(ClientInterval)
 
           val takeSample =
             for {
@@ -107,14 +80,14 @@ object SimulationRunner {
                   IO.sleep(segment.duration)
               }
 
-          offer.foreverM.background
-            .replicateA_(OfferWorkers)
+          callBackend.foreverM.background
+            .replicateA_(NumberOfClients)
             .surround((takeSample >> IO.sleep(SamplePeriod)).foreverM.background.surround(drive))
         }
       samples        <- samplesRef.get
       rateEvents     <- rateEventsRef.get
       gradientEvents <- gradientEventsRef.get
-    } yield RunResult(
+    } yield Result(
       scenario = scenario,
       samples = samples,
       rateEvents = rateEvents,
@@ -123,4 +96,31 @@ object SimulationRunner {
 
   private def toRps(rate: Rate): Double =
     rate.requests.toDouble / rate.period.toUnit(TimeUnit.SECONDS)
+
+  /** One sampled point of a closed-loop run.
+    *
+    * @param aimdRps
+    *   the AIMD's current rate estimate (the controlled variable)
+    * @param admittedRps
+    *   the measured throughput the limiter actually admitted over the last sample interval
+    * @param backendCapacityRps
+    *   the backend's current sustainable capacity (the bottleneck the AIMD is trying to discover)
+    * @param observedFailureRatio
+    *   the limiter's sampled failure ratio in `[0, 1]`
+    */
+  final case class Sample(
+      elapsedMillis: Long,
+      aimdRps: Double,
+      admittedRps: Double,
+      backendCapacityRps: Double,
+      observedFailureRatio: Double
+  )
+
+  /** Everything a chart needs for one scenario: the dense sampled timeseries plus the discrete control-loop events. */
+  final case class Result(
+      scenario: Scenario,
+      samples: Vector[Sample],
+      rateEvents: Vector[(Long, Double)],
+      gradientEvents: Vector[(Long, FailureGradient)]
+  )
 }

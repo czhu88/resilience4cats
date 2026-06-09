@@ -24,7 +24,7 @@ object CsvWriter {
   private val ManifestHeader: String = "scenario,description,samples_file,events_file"
 
   /** Write `<scenario>-samples.csv` and `<scenario>-events.csv` into `dataDir`, returning the manifest entry. */
-  def writeScenario(result: RunResult, dataDir: Path): IO[ManifestEntry] = {
+  def writeScenario(result: SimulationRunner.Result, dataDir: Path): IO[ManifestEntry] = {
     val samplesFile = s"${result.scenario.name}-samples.csv"
     val eventsFile  = s"${result.scenario.name}-events.csv"
 
