@@ -5,16 +5,28 @@ import cats.syntax.all._
 import io.mienks.resilience.Rate
 import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter
 import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.FailureGradient
+import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.syntax._
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration._
 
-/** One sampled point of the run. `rps` is the AIMD's current estimate expressed as requests/second. */
+/** One sampled point of a closed-loop run.
+  *
+  * @param aimdRps
+  *   the AIMD's current rate estimate (the controlled variable)
+  * @param admittedRps
+  *   the measured throughput the limiter actually admitted over the last sample interval
+  * @param backendCapacityRps
+  *   the backend's current sustainable capacity (the bottleneck the AIMD is trying to discover)
+  * @param observedFailureRatio
+  *   the limiter's sampled failure ratio in `[0, 1]`
+  */
 final case class Sample(
     elapsedMillis: Long,
-    targetFailureRatio: Double,
-    observedFailureRatio: Double,
-    rps: Double
+    aimdRps: Double,
+    admittedRps: Double,
+    backendCapacityRps: Double,
+    observedFailureRatio: Double
 )
 
 /** Everything a chart needs for one scenario: the dense sampled timeseries plus the discrete control-loop events. */
@@ -27,19 +39,28 @@ final case class RunResult(
 
 object SimulationRunner {
 
-  // Outcomes recorded per measurement period; large enough that `round(hits * ratio)` tracks the target ratio closely.
-  private val BackendHitsPerRound: Int = 50
+  // Several offer fibers, each attempting roughly every OfferInterval, so the offered load comfortably exceeds maxRate
+  // and the admitted rate tracks the limiter's current refill rate.
+  private val OfferWorkers: Int             = 4
+  private val OfferInterval: FiniteDuration = 1.millis
 
   // Sampled finer than the slot duration so band crossings and rate cuts are visible in the timeseries.
-  private val SamplePeriod: FiniteDuration = 15.millis
+  private val SamplePeriod: FiniteDuration = 50.millis
+
+  // Fixed seed keeps the graded backend's probabilistic failures reproducible across runs.
+  private val Seed: Long = 42L
 
   def run(scenario: Scenario): IO[RunResult] =
     for {
-      ratioRef          <- Ref[IO].of(scenario.segments.headOption.fold(0.0)(_.failureRatio))
       samplesRef        <- Ref[IO].of(Vector.empty[Sample])
       rateEventsRef     <- Ref[IO].of(Vector.empty[(Long, Double)])
       gradientEventsRef <- Ref[IO].of(Vector.empty[(Long, FailureGradient)])
-      startNanos        <- IO.monotonic
+      admittedRef       <- Ref[IO].of(0L)
+      initialCapacity = scenario.segments.headOption.fold(scenario.config.maxRate)(_.capacity)
+      capacityRef   <- Ref[IO].of(initialCapacity)
+      backend       <- Backend.create(base = initialCapacity, tiers = scenario.backendTiers, seed = Seed)
+      startNanos    <- IO.monotonic
+      lastSampleRef <- Ref[IO].of((startNanos.toNanos, 0L))
       elapsedMillis = IO.monotonic.map(now => (now - startNanos).toMillis)
       _ <- AdaptiveRateLimiter
         .start[IO](
@@ -49,35 +70,46 @@ object SimulationRunner {
           onRateChange = (rate: Rate) => elapsedMillis.flatMap(ms => rateEventsRef.update(_ :+ (ms, toRps(rate))))
         )
         .use { limiter =>
-          val hitBackend =
-            ratioRef.get.flatMap { ratio =>
-              val failures = math.round(BackendHitsPerRound * ratio).toInt
-              limiter.recordFailure.replicateA_(failures) >>
-                limiter.recordSuccess.replicateA_(BackendHitsPerRound - failures)
-            } >> IO.sleep(scenario.config.measurementPeriod)
+          val offer =
+            limiter.protect(
+              fa = admittedRef.update(_ + 1L) >> backend.call,
+              isError = (ok: Boolean) => !ok,
+              orElse = true
+            ) >> IO.sleep(OfferInterval)
 
           val takeSample =
             for {
-              ms       <- elapsedMillis
-              target   <- ratioRef.get
+              now      <- IO.monotonic
+              admitted <- admittedRef.get
+              prev     <- lastSampleRef.getAndSet((now.toNanos, admitted))
+              (prevNanos, prevAdmitted) = prev
+              dtSeconds                 = (now.toNanos - prevNanos).toDouble / 1e9
+              admittedRps               = if (dtSeconds > 0.0) (admitted - prevAdmitted).toDouble / dtSeconds else 0.0
               observed <- limiter.failureRatio
               rate     <- limiter.rate
+              capacity <- capacityRef.get
               _        <- samplesRef.update(
                 _ :+ Sample(
-                  elapsedMillis = ms,
-                  targetFailureRatio = target,
-                  observedFailureRatio = observed,
-                  rps = toRps(rate)
+                  elapsedMillis = (now - startNanos).toMillis,
+                  aimdRps = toRps(rate),
+                  admittedRps = admittedRps,
+                  backendCapacityRps = toRps(capacity),
+                  observedFailureRatio = observed
                 )
               )
             } yield ()
 
           val drive =
             IO.sleep(scenario.warmup) >>
-              scenario.segments.traverse_(segment => ratioRef.set(segment.failureRatio) >> IO.sleep(segment.duration))
+              scenario.segments.traverse_ { segment =>
+                capacityRef.set(segment.capacity) >>
+                  backend.setCapacity(segment.capacity) >>
+                  IO.sleep(segment.duration)
+              }
 
-          (hitBackend.foreverM.background, (takeSample >> IO.sleep(SamplePeriod)).foreverM.background).tupled
-            .surround(drive)
+          offer.foreverM.background
+            .replicateA_(OfferWorkers)
+            .surround((takeSample >> IO.sleep(SamplePeriod)).foreverM.background.surround(drive))
         }
       samples        <- samplesRef.get
       rateEvents     <- rateEventsRef.get

@@ -18,7 +18,8 @@ final case class ManifestEntry(
 /** Writes the timeseries of a run as plain CSV plus a manifest, so the matplotlib renderer needs no Scala knowledge. */
 object CsvWriter {
 
-  private val SamplesHeader: String  = "elapsed_ms,target_failure_ratio,observed_failure_ratio,rps"
+  private val SamplesHeader: String =
+    "elapsed_ms,aimd_rps,admitted_rps,backend_capacity_rps,observed_failure_ratio"
   private val EventsHeader: String   = "elapsed_ms,kind,detail"
   private val ManifestHeader: String = "scenario,description,samples_file,events_file"
 
@@ -30,9 +31,10 @@ object CsvWriter {
     val samplesContent =
       (SamplesHeader +: result.samples.map { sample =>
         s"${sample.elapsedMillis.toString}," +
-          s"${sample.targetFailureRatio.toString}," +
-          s"${sample.observedFailureRatio.toString}," +
-          sample.rps.toString
+          s"${sample.aimdRps.toString}," +
+          s"${sample.admittedRps.toString}," +
+          s"${sample.backendCapacityRps.toString}," +
+          sample.observedFailureRatio.toString
       }).mkString("\n")
 
     val rateRows =

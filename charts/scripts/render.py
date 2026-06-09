@@ -38,13 +38,14 @@ def read_rows(path):
 
 
 def load_samples(path):
-    elapsed, target, observed, rps = [], [], [], []
+    elapsed, aimd, admitted, capacity, observed = [], [], [], [], []
     for row in read_rows(path):
         elapsed.append(float(row["elapsed_ms"]) / 1000.0)  # seconds
-        target.append(float(row["target_failure_ratio"]))
+        aimd.append(float(row["aimd_rps"]))
+        admitted.append(float(row["admitted_rps"]))
+        capacity.append(float(row["backend_capacity_rps"]))
         observed.append(float(row["observed_failure_ratio"]))
-        rps.append(float(row["rps"]))
-    return elapsed, target, observed, rps
+    return elapsed, aimd, admitted, capacity, observed
 
 
 def load_events(path):
@@ -55,25 +56,29 @@ def load_events(path):
 
 
 def render_scenario(entry, data_dir, out_dir):
-    elapsed, target, observed, rps = load_samples(data_dir / entry["samples_file"])
+    elapsed, aimd, admitted, capacity, observed = load_samples(data_dir / entry["samples_file"])
     events = load_events(data_dir / entry["events_file"])
 
     fig, ax_rate = plt.subplots(figsize=(11, 5))
 
-    # Left axis: the AIMD rate estimate (requests / second).
+    # Left axis: rates (requests / second). The AIMD estimate is the controlled variable; the dashed line is the
+    # backend's true capacity (the bottleneck the AIMD is discovering); admitted is the measured throughput.
+    capacity_line, = ax_rate.plot(
+        elapsed, capacity, color="#7f8c8d", linewidth=1.5, linestyle="--", label="backend capacity"
+    )
+    admitted_line, = ax_rate.plot(
+        elapsed, admitted, color="#16a085", linewidth=1.0, alpha=0.6, label="admitted (measured)"
+    )
     rate_line, = ax_rate.step(
-        elapsed, rps, where="post", color="#2c3e50", linewidth=2.0, label="rate (rps)"
+        elapsed, aimd, where="post", color="#2c3e50", linewidth=2.0, label="AIMD rate estimate"
     )
     ax_rate.set_xlabel("time (s)")
     ax_rate.set_ylabel("rate (requests / second)")
     ax_rate.set_ylim(bottom=0)
     ax_rate.grid(True, alpha=0.3)
 
-    # Right axis: failure ratio in [0, 1], target (driven) vs observed (sampled by the limiter).
+    # Right axis: the limiter's sampled failure ratio in [0, 1].
     ax_ratio = ax_rate.twinx()
-    target_line, = ax_ratio.plot(
-        elapsed, target, color="#8e44ad", linewidth=1.5, linestyle=":", label="failure ratio (target)"
-    )
     observed_line, = ax_ratio.plot(
         elapsed, observed, color="#2980b9", linewidth=1.5, alpha=0.85, label="failure ratio (observed)"
     )
@@ -91,7 +96,7 @@ def render_scenario(entry, data_dir, out_dir):
         ax_rate.axvline(ts, color=style["color"], linestyle=style["linestyle"], linewidth=1.2, alpha=0.7)
         seen_kinds.add(kind)
 
-    handles = [rate_line, target_line, observed_line]
+    handles = [rate_line, admitted_line, capacity_line, observed_line]
     handles += [
         Line2D([0], [0], color=EVENT_STYLES[kind]["color"], linestyle=EVENT_STYLES[kind]["linestyle"],
                label=EVENT_STYLES[kind]["label"])

@@ -6,10 +6,14 @@ import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.{Config, Hys
 
 import scala.concurrent.duration._
 
-/** One leg of a scenario: hold the simulated backend at `failureRatio` for `duration`. */
-final case class Segment(failureRatio: Double, duration: FiniteDuration)
+/** One leg of a scenario: hold the simulated backend's base capacity at `capacity` for `duration`. A lower capacity is
+  * a degraded backend; raising it again is recovery.
+  */
+final case class Segment(capacity: Rate, duration: FiniteDuration)
 
-/** A scripted run against an [[io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter]].
+/** A closed-loop run against an [[io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter]]: a workload offers
+  * load through the limiter to a [[Backend]] whose capacity follows `segments`, and failures emerge from the limiter
+  * over-driving that capacity.
   *
   * @param name
   *   slug used for output file names
@@ -17,26 +21,29 @@ final case class Segment(failureRatio: Double, duration: FiniteDuration)
   *   one-line caption rendered on the chart
   * @param config
   *   limiter configuration for the run
+  * @param backendTiers
+  *   capacity tiers of the simulated backend (see [[Backend]])
   * @param warmup
-  *   settle time at the first segment's ratio before sampling-relevant behavior is interesting (still sampled)
+  *   settle time at the first segment's capacity before the scripted capacity changes begin
   * @param segments
-  *   ordered backend-health phases driven into the limiter
+  *   ordered backend-capacity phases
   */
 final case class Scenario(
     name: String,
     description: String,
     config: Config,
+    backendTiers: NonEmptyList[Backend.Tier],
     warmup: FiniteDuration,
     segments: List[Segment]
 )
 
 object Scenario {
 
-  // Scaled-down so each scenario runs in a few real seconds while keeping enough sample resolution.
-  private val SlotDuration: FiniteDuration       = 25.millis
-  private val MeasurementBuckets: Int            = 4
-  private val MeasurementWindow: FiniteDuration  = SlotDuration * MeasurementBuckets // 100ms
-  private val RateIncreasePeriod: FiniteDuration = 40.millis
+  private def rps(requests: Int): Rate = Rate(requests = requests, period = 1.second)
+
+  // Higher rps scale than a unit test so the sawtooth is smooth and the failure ratio is well sampled.
+  private val SlotDuration: FiniteDuration = 50.millis
+  private val MeasurementBuckets: Int      = 4
 
   private val Bands: NonEmptyList[HysteresisBand] = NonEmptyList.of(
     HysteresisBand(exit = 0.1, start = 0.3), // level 0: minor degradation
@@ -45,12 +52,13 @@ object Scenario {
 
   private val BaseConfig: Config =
     Config(
-      capacity = 10,
-      initialRate = Rate(requests = 2, period = 1.second),
-      minRate = Rate(requests = 1, period = 1.second),
-      maxRate = Rate(requests = 10, period = 1.second),
-      rateIncreaseBy = Rate(requests = 2, period = 1.second),
-      rateIncreasePeriod = RateIncreasePeriod,
+      capacity = 40,
+      initialRate = rps(20),
+      minRate = rps(20),
+      maxRate = rps(400),
+      // Gentle additive increase (~50 rps/s) so the sawtooth ramps are long and smooth.
+      rateIncreaseBy = rps(5),
+      rateIncreasePeriod = 100.millis,
       rateDecreaseBy = 0.5,
       numberOfSlotsForMeasurements = MeasurementBuckets,
       slotDuration = SlotDuration,
@@ -59,77 +67,85 @@ object Scenario {
       failureLevels = Bands
     )
 
-  /** All scenarios mirror the documented behaviors in `AdaptiveRateLimiterTests`. */
+  // A capacity comfortably above maxRate keeps the backend healthy (no overload), so the rate plateaus at max.
+  private val Healthy: Rate = rps(500)
+
   val library: List[Scenario] = List(
-    healthyClimb,
+    congestionSawtooth,
     quickDegradation,
     degradeThenRecover,
     slowRecovery,
     flapping,
-    slowDegradation
+    slowDegradation,
+    gradedDegradation
   )
 
-  private def healthyClimb: Scenario =
+  private def congestionSawtooth: Scenario =
     Scenario(
-      name = "healthy-climb",
-      description = "Healthy backend: the AIMD estimate climbs additively to maxRate and stays there.",
+      name = "congestion-sawtooth",
+      description = "Constant backend capacity below maxRate: AIMD oscillates around it in the classic TCP sawtooth.",
       config = BaseConfig,
-      warmup = MeasurementWindow,
-      segments = List(Segment(failureRatio = 0.0, duration = MeasurementWindow * 16))
+      backendTiers = Backend.Single,
+      warmup = 1.second,
+      segments = List(Segment(capacity = rps(200), duration = 16.seconds))
     )
 
   private def quickDegradation: Scenario =
     Scenario(
       name = "quick-degradation",
-      description = "A failure spike promotes through both bands and multiplicatively cuts the rate.",
+      description = "A sudden capacity drop trips a band and cuts the rate into a lower sawtooth around the capacity.",
       config = BaseConfig,
-      warmup = MeasurementWindow,
+      backendTiers = Backend.Single,
+      warmup = 1.second,
       segments = List(
-        Segment(failureRatio = 0.0, duration = MeasurementWindow * 12),
-        Segment(failureRatio = 0.8, duration = MeasurementWindow * 10)
+        Segment(capacity = Healthy, duration = 3.seconds),
+        Segment(capacity = rps(110), duration = 12.seconds)
       )
     )
 
   private def degradeThenRecover: Scenario =
     Scenario(
       name = "degrade-then-recover",
-      description = "After a spike and rate cut, a recovered backend returns to Healthy and climbs back to max.",
+      description = "After a capacity collapse and rate cut, restored capacity returns the backend to healthy and max.",
       config = BaseConfig,
-      warmup = MeasurementWindow,
+      backendTiers = Backend.Single,
+      warmup = 1.second,
       segments = List(
-        Segment(failureRatio = 0.0, duration = MeasurementWindow * 12),
-        Segment(failureRatio = 0.8, duration = MeasurementWindow * 8),
-        Segment(failureRatio = 0.0, duration = MeasurementWindow * 16)
+        Segment(capacity = Healthy, duration = 3.seconds),
+        Segment(capacity = rps(110), duration = 8.seconds),
+        Segment(capacity = Healthy, duration = 10.seconds)
       )
     )
 
   private def slowRecovery: Scenario =
     Scenario(
       name = "slow-recovery",
-      description = "Errors clearing gradually hold the failing tier (hysteresis) until fully below the exit band.",
-      config = BaseConfig.copy(initialRate = BaseConfig.maxRate),
-      warmup = MeasurementWindow,
+      description = "Capacity recovers in steps; the limiter climbs back to a higher safe rate at each step.",
+      config = BaseConfig,
+      backendTiers = Backend.Single,
+      warmup = 1.second,
       segments = List(
-        Segment(failureRatio = 0.0, duration = MeasurementWindow * 8),
-        Segment(failureRatio = 0.8, duration = MeasurementWindow * 6), // spike to the severe tier
-        Segment(failureRatio = 0.5, duration = MeasurementWindow * 6), // linger inside band 1
-        Segment(failureRatio = 0.2, duration = MeasurementWindow * 6), // demote to band 0, still above exit
-        Segment(failureRatio = 0.0, duration = MeasurementWindow * 12) // full clear -> Recovered
+        Segment(capacity = Healthy, duration = 3.seconds),
+        Segment(capacity = rps(120), duration = 5.seconds), // severe
+        Segment(capacity = rps(200), duration = 5.seconds), // partial
+        Segment(capacity = rps(320), duration = 5.seconds), // more headroom
+        Segment(capacity = Healthy, duration = 6.seconds)   // full clear
       )
     )
 
   private def flapping: Scenario =
     Scenario(
       name = "flapping",
-      description = "Repeated degrade/recover cycles ratchet the rate down toward the min floor.",
-      // Slow the additive recovery so the rate barely climbs between flaps; compounding cuts then reach the floor.
-      config = BaseConfig.copy(initialRate = BaseConfig.maxRate, rateIncreasePeriod = 1.second),
-      warmup = MeasurementWindow,
+      description = "Capacity flaps between healthy and degraded: compounding cuts ratchet the rate toward the floor.",
+      config = BaseConfig,
+      backendTiers = Backend.Single,
+      warmup = 1.second,
+      // Degraded windows longer than recovery windows so the cuts dominate and the rate ratchets down.
       segments = List
-        .fill(4)(
+        .fill(5)(
           List(
-            Segment(failureRatio = 0.8, duration = MeasurementWindow * 4),
-            Segment(failureRatio = 0.0, duration = MeasurementWindow * 4)
+            Segment(capacity = rps(50), duration = 3.seconds),
+            Segment(capacity = Healthy, duration = 1500.millis)
           )
         )
         .flatten
@@ -138,14 +154,32 @@ object Scenario {
   private def slowDegradation: Scenario =
     Scenario(
       name = "slow-degradation",
-      description = "Rising errors trip the bands one tier at a time, compounding the rate cut.",
-      // Slow the additive recovery so the first tier's cut is still visible when the second tier trips.
-      config = BaseConfig.copy(initialRate = BaseConfig.maxRate, rateIncreasePeriod = 1.second),
-      warmup = MeasurementWindow,
+      description = "Capacity steps down gradually; the limiter re-discovers a lower safe rate at each step.",
+      config = BaseConfig,
+      backendTiers = Backend.Single,
+      warmup = 1.second,
       segments = List(
-        Segment(failureRatio = 0.0, duration = MeasurementWindow * 6),
-        Segment(failureRatio = 0.4, duration = MeasurementWindow * 10), // trips only the first tier
-        Segment(failureRatio = 0.8, duration = MeasurementWindow * 10)  // trips the second tier
+        Segment(capacity = Healthy, duration = 4.seconds),
+        Segment(capacity = rps(150), duration = 7.seconds), // mild: a sawtooth around the new capacity
+        Segment(capacity = rps(70), duration = 8.seconds)   // lower: a tighter sawtooth around the new capacity
+      )
+    )
+
+  private def gradedDegradation: Scenario =
+    Scenario(
+      name = "graded-degradation",
+      description = "A two-tier backend (soft + hard ceiling) produces two distinct failure levels across the bands.",
+      config = BaseConfig,
+      // Soft ceiling at half the base capacity fails 50% of its overflow; the hard ceiling at the base always fails.
+      backendTiers = NonEmptyList.of(
+        Backend.Tier(relativeCapacity = 0.5, failProbability = 0.5),
+        Backend.Tier(relativeCapacity = 1.0, failProbability = 1.0)
+      ),
+      warmup = 1.second,
+      segments = List(
+        Segment(capacity = Healthy, duration = 4.seconds),
+        Segment(capacity = rps(80), duration = 6.seconds), // severe: the soft then hard ceiling trip both bands
+        Segment(capacity = Healthy, duration = 8.seconds)  // restored: the backend recovers and the rate climbs back
       )
     )
 }
