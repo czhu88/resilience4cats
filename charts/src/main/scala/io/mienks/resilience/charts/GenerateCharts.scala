@@ -22,7 +22,7 @@ object GenerateCharts extends IOApp.Simple {
     for {
       _       <- IO.blocking { Files.createDirectories(dataDir); () }
       _       <- IO.println(s"Writing scenario data to ${dataDir.toAbsolutePath.toString}")
-      entries <- Scenario.library.traverse { scenario =>
+      entries <- Scenario.library.parTraverse { scenario =>
         for {
           _      <- IO.println(s"  running '${scenario.name}' ...")
           result <- SimulationRunner.run(scenario)
