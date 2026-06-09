@@ -205,6 +205,17 @@ The categorizer emits `FailureGradient.Worsening(level)` (one event per band cro
 `FailureGradient.Recovering(fromLevel)` on partial recovery, and `FailureGradient.Recovered` on full recovery. The AIMD
 controller multiplicatively decreases only on `Worsening` and additively increases on a fixed tick.
 
+### Behavior
+
+Driven against a simulated backend whose failure rate depends on the offered load, the AIMD loop produces the classic
+TCP-style sawtooth: additive increase probes for more throughput until the backend overloads, then a multiplicative
+decrease backs off.
+
+![congestion-sawtooth](docs/images/adaptive-rate-limiter/congestion-sawtooth.png)
+
+See [`charts/`](charts/README.md) for how these charts are generated and for more scenarios (degradation, recovery,
+flapping, and graded multi-tier backends).
+
 ## Circuit-Breaker
 The `circuit-breaker` models a concurrent state machine used to provide stability and prevent cascading failures in
 distributed systems. 
