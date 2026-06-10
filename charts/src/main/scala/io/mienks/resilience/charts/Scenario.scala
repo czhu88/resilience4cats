@@ -135,10 +135,13 @@ object Scenario {
       name = "slow-degradation",
       description = "Capacity steps down gradually; the limiter re-discovers a lower safe rate at each step.",
       config = BaseConfig,
+      // Each step is gentle enough that the incoming rate stays in the mild band: a steep drop would throw the rate
+      // into the severe band, where a single multiplicative cut can't clear the failure ratio and the rate creeps up.
       phases = NonEmptyList.of(
         Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = Warmup + 1.second),
-        Backend.Phase(hardCeiling = rps(150), softCeilings = Nil, duration = 4.seconds), // mild sawtooth around it
-        Backend.Phase(hardCeiling = rps(70), softCeilings = Nil, duration = 4.seconds)   // tighter sawtooth around it
+        Backend.Phase(hardCeiling = rps(150), softCeilings = Nil, duration = 3.seconds), // mild sawtooth around it
+        Backend.Phase(hardCeiling = rps(110), softCeilings = Nil, duration = 3.seconds), // lower sawtooth
+        Backend.Phase(hardCeiling = rps(90), softCeilings = Nil, duration = 3.seconds)   // tighter sawtooth
       )
     )
 
