@@ -18,18 +18,10 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless: render straight to files
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = REPO_ROOT / "docs" / "charts" / "data"
 DEFAULT_OUT_DIR = REPO_ROOT / "docs" / "images" / "adaptive-rate-limiter"
-
-# Distinct color + style per control-loop event kind.
-EVENT_STYLES = {
-    "worsening": {"color": "#c0392b", "linestyle": "--", "label": "worsening"},
-    "recovering": {"color": "#e67e22", "linestyle": "--", "label": "recovering"},
-    "recovered": {"color": "#27ae60", "linestyle": "-.", "label": "recovered"},
-}
 
 
 def read_rows(path):
@@ -48,16 +40,8 @@ def load_samples(path):
     return elapsed, aimd, admitted, capacity, observed
 
 
-def load_events(path):
-    events = []
-    for row in read_rows(path):
-        events.append((float(row["elapsed_ms"]) / 1000.0, row["kind"], row.get("detail", "")))
-    return events
-
-
 def render_scenario(entry, data_dir, out_dir):
     elapsed, aimd, admitted, capacity, observed = load_samples(data_dir / entry["samples_file"])
-    events = load_events(data_dir / entry["events_file"])
 
     fig, ax_rate = plt.subplots(figsize=(11, 5))
 
@@ -85,32 +69,18 @@ def render_scenario(entry, data_dir, out_dir):
     ax_ratio.set_ylabel("failure ratio")
     ax_ratio.set_ylim(-0.02, 1.02)
 
-    # Vertical markers for control-loop events.
-    seen_kinds = set()
-    for ts, kind, _detail in events:
-        if kind == "rate_change":
-            continue
-        style = EVENT_STYLES.get(kind)
-        if style is None:
-            continue
-        ax_rate.axvline(ts, color=style["color"], linestyle=style["linestyle"], linewidth=1.2, alpha=0.7)
-        seen_kinds.add(kind)
-
     handles = [rate_line, admitted_line, capacity_line, observed_line]
-    handles += [
-        Line2D([0], [0], color=EVENT_STYLES[kind]["color"], linestyle=EVENT_STYLES[kind]["linestyle"],
-               label=EVENT_STYLES[kind]["label"])
-        for kind in EVENT_STYLES
-        if kind in seen_kinds
-    ]
-    ax_rate.legend(handles=handles, loc="upper left", framealpha=0.9, fontsize=9)
+    # Legend in a single horizontal row above the plot so it never covers the curves.
+    ax_rate.legend(
+        handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.02), ncol=len(handles), frameon=False, fontsize=9
+    )
 
     fig.suptitle(entry["scenario"], fontsize=14, fontweight="bold")
-    ax_rate.set_title(entry["description"], fontsize=10, color="#555555")
+    ax_rate.set_title(entry["description"], fontsize=10, color="#555555", pad=30)
     fig.tight_layout()
 
     out_path = out_dir / f"{entry['scenario']}.png"
-    fig.savefig(out_path, dpi=130)
+    fig.savefig(out_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
