@@ -71,7 +71,7 @@ Two backend shapes are used:
 
 A [`Scenario`](src/main/scala/io/mienks/resilience/charts/Scenario.scala) is the limiter config plus a
 `NonEmptyList[Backend.Phase]` — the backend's capacity over time. A hard ceiling *below* the limiter's `maxRate` is a
-degraded backend; raising it again is recovery. The whole schedule is handed to `Backend.create` up front, and an
+degraded backend; raising it again is recovery. The whole schedule is handed to `Backend.start` up front, and an
 internal fiber walks it, reconfiguring the ceilings as each phase begins (there is no external capacity mutator). A
 shared `Warmup` settle time is folded into the first phase's duration.
 [`SimulationRunner`](src/main/scala/io/mienks/resilience/charts/SimulationRunner.scala) offers load through
