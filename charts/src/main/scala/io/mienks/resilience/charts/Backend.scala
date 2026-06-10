@@ -92,13 +92,14 @@ object Backend {
 
     override def call: IO[Boolean] =
       for {
-        failProbabilities <- failProbabilitiesRef.get
+        failProbabilities     <- failProbabilitiesRef.get
         overflowProbabilities <- failProbabilities.zip(buckets).traverse { case (failProbability, limiter) =>
           limiter.consume().map(admitted => if (admitted) 0.0 else failProbability)
         }
-         failProbability = overflowProbabilities.maximum
-        admit <- if (failProbability <= 0.0) true.pure[IO]
-        else IO(rng.nextDouble()).map(_ >= failProbability)
+        failProbability = overflowProbabilities.maximum
+        admit <-
+          if (failProbability <= 0.0) true.pure[IO]
+          else IO(rng.nextDouble()).map(_ >= failProbability)
       } yield admit
 
     override def baseCapacity: IO[Rate] = capacity.get
