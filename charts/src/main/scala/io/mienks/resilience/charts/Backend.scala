@@ -43,65 +43,64 @@ object Backend {
   // Burst tokens per ceiling; kept small so each limiter behaves like a rate ceiling rather than a buffer.
   private val BurstCapacity: Int = 8
 
-  /** Build a backend that walks `schedule` on an internal fiber, reconfiguring its ceilings as each phase begins. All
-    * phases must share the same number of soft ceilings, since the buckets are created once from the head phase.
+  /** Build a backend that walks `schedule` on an internal fiber, reconfiguring its ceilings as each phase begins. The
+    * buckets are created once from the head phase, so all phases must share the same number of soft ceilings; each
+    * phase then updates both the refill rates and the failure probabilities.
     */
-  def create(schedule: NonEmptyList[Phase], seed: Long): Resource[IO, Backend[IO]] = {
-    val head = schedule.head
+  def start(schedule: NonEmptyList[Phase], seed: Long): Resource[IO, Backend[IO]] = {
     for {
-      rng                  <- Resource.eval(IO(new Random(seed)))
-      hard                 <- Resource.eval(bucket(head.hardCeiling))
-      softs                <- Resource.eval(head.softCeilings.traverse(ceiling => bucket(ceiling.capacity)))
-      failProbabilitiesRef <- Resource.eval(Ref[IO].of(head.softCeilings.map(_.failProbability)))
-      baseRef              <- Resource.eval(Ref[IO].of(head.hardCeiling))
-      _                    <- drive(schedule, hard, softs, failProbabilitiesRef, baseRef).background
+      rng <- Resource.eval(IO(new Random(seed)))
+      initialPhase = schedule.head
+      buckets <- Resource.eval(
+        ceilingRates(initialPhase).traverse { rate =>
+          RateLimiter.Dynamic.full[IO](capacity = BurstCapacity, refillRate = rate)
+        }
+      )
+      capacity             <- Resource.eval(Ref[IO].of(initialPhase.hardCeiling))
+      failProbabilitiesRef <- Resource.eval(Ref[IO].of(failProbabilities(initialPhase)))
+
+      _ <- schedule.traverse_ { phase =>
+        val updateBuckets = buckets.toList.zip(ceilingRates(phase).toList).traverse_ { case (limiter, rate) =>
+          limiter.setRefillRate(rate)
+        }
+
+        updateBuckets >>
+          failProbabilitiesRef.set(failProbabilities(phase)) >>
+          capacity.set(phase.hardCeiling) >>
+          IO.sleep(phase.duration)
+      }.background
     } yield new TokenBucketBackend(
-      hard = hard,
-      softs = softs,
+      buckets = buckets,
       failProbabilitiesRef = failProbabilitiesRef,
-      baseRef = baseRef,
+      capacity = capacity,
       rng = rng
     )
   }
 
-  private def bucket(refillRate: Rate): IO[DynamicRateLimiter[IO]] =
-    RateLimiter.Dynamic.full[IO](capacity = BurstCapacity, refillRate = refillRate)
+  private def ceilingRates(phase: Phase): NonEmptyList[Rate] =
+    NonEmptyList(phase.hardCeiling, phase.softCeilings.map(_.capacity))
 
-  private def drive(
-      schedule: NonEmptyList[Phase],
-      hard: DynamicRateLimiter[IO],
-      softs: List[DynamicRateLimiter[IO]],
-      failProbabilitiesRef: Ref[IO, List[Double]],
-      baseRef: Ref[IO, Rate]
-  ): IO[Unit] =
-    schedule.traverse_ { phase =>
-      hard.setRefillRate(phase.hardCeiling) >>
-        softs.zip(phase.softCeilings).traverse_ { case (limiter, ceiling) =>
-          limiter.setRefillRate(ceiling.capacity)
-        } >>
-        failProbabilitiesRef.set(phase.softCeilings.map(_.failProbability)) >>
-        baseRef.set(phase.hardCeiling) >>
-        IO.sleep(phase.duration)
-    }
+  private def failProbabilities(phase: Phase): NonEmptyList[Double] =
+    NonEmptyList(1.0, phase.softCeilings.map(_.failProbability))
 
   private final class TokenBucketBackend(
-      hard: DynamicRateLimiter[IO],
-      softs: List[DynamicRateLimiter[IO]],
-      failProbabilitiesRef: Ref[IO, List[Double]],
-      baseRef: Ref[IO, Rate],
+      buckets: NonEmptyList[DynamicRateLimiter[IO]],
+      failProbabilitiesRef: Ref[IO, NonEmptyList[Double]],
+      capacity: Ref[IO, Rate],
       rng: Random
   ) extends Backend[IO] {
 
     override def call: IO[Boolean] =
       for {
-        hardAdmitted      <- hard.consume()
-        softAdmitted      <- softs.traverse(_.consume())
         failProbabilities <- failProbabilitiesRef.get
-        overflowed      = softAdmitted.zip(failProbabilities).collect { case (admitted, p) if !admitted => p }
-        failProbability = if (!hardAdmitted) 1.0 else overflowed.maxOption.getOrElse(0.0)
-        result <- if (failProbability <= 0.0) true.pure[IO] else IO(rng.nextDouble()).map(_ >= failProbability)
-      } yield result
+        overflowProbabilities <- failProbabilities.zip(buckets).traverse { case (failProbability, limiter) =>
+          limiter.consume().map(admitted => if (admitted) 0.0 else failProbability)
+        }
+         failProbability = overflowProbabilities.maximum
+        admit <- if (failProbability <= 0.0) true.pure[IO]
+        else IO(rng.nextDouble()).map(_ >= failProbability)
+      } yield admit
 
-    override def baseCapacity: IO[Rate] = baseRef.get
+    override def baseCapacity: IO[Rate] = capacity.get
   }
 }

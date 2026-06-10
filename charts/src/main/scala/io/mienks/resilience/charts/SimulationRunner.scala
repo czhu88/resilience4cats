@@ -25,70 +25,121 @@ object SimulationRunner {
 
   def run(scenario: Scenario): IO[Result] =
     for {
-      samplesRef        <- Ref[IO].of(Vector.empty[Sample])
-      rateEventsRef     <- Ref[IO].of(Vector.empty[(Long, Double)])
-      gradientEventsRef <- Ref[IO].of(Vector.empty[(Long, FailureGradient)])
-      admittedRef       <- Ref[IO].of(0L)
-      startNanos        <- IO.monotonic
-      lastSampleRef     <- Ref[IO].of((startNanos.toNanos, 0L))
-      elapsedMillis = IO.monotonic.map(now => (now - startNanos).toMillis)
-      _ <- Backend.create(schedule = scenario.phases, seed = Seed).use { backend =>
-        AdaptiveRateLimiter
+      recorder <- Recorder.create
+      simulation = for {
+        backend <- Backend.start(schedule = scenario.phases, seed = Seed)
+
+        limiter <- AdaptiveRateLimiter
           .start[IO](
             config = scenario.config,
-            onFailureCategoryChange =
-              (event: FailureGradient) => elapsedMillis.flatMap(ms => gradientEventsRef.update(_ :+ (ms, event))),
-            onRateChange = (rate: Rate) => elapsedMillis.flatMap(ms => rateEventsRef.update(_ :+ (ms, toRps(rate))))
+            onFailureCategoryChange = (event: FailureGradient) => recorder.recordGradient(event),
+            onRateChange = (rate: Rate) => recorder.recordRate(toRps(rate))
           )
-          .use { limiter =>
-            val callBackend =
-              limiter.protect(
-                fa = admittedRef.update(_ + 1L) >> backend.call,
-                isError = (ok: Boolean) => !ok,
-                orElse = true
-              ) >> IO.sleep(ClientInterval)
 
-            val takeSample =
-              for {
-                now      <- IO.monotonic
-                admitted <- admittedRef.get
-                prev     <- lastSampleRef.getAndSet((now.toNanos, admitted))
-                (prevNanos, prevAdmitted) = prev
-                dtSeconds                 = (now.toNanos - prevNanos).toDouble / 1e9
-                admittedRps               = if (dtSeconds > 0.0) (admitted - prevAdmitted).toDouble / dtSeconds else 0.0
-                observed <- limiter.failureRatio
-                rate     <- limiter.rate
-                capacity <- backend.baseCapacity
-                _        <- samplesRef.update(
-                  _ :+ Sample(
-                    elapsedMillis = (now - startNanos).toMillis,
-                    aimdRps = toRps(rate),
-                    admittedRps = admittedRps,
-                    backendCapacityRps = toRps(capacity),
-                    observedFailureRatio = observed
-                  )
-                )
-              } yield ()
+        callBackend = limiter.protect(
+          fa = recorder.countAdmitted >> backend.call,
+          isError = (ok: Boolean) => !ok,
+          orElse = true
+        ) >> IO.sleep(ClientInterval)
 
-            val drive = IO.sleep(scenario.totalDuration)
+        takeSample =
+          for {
+            observed <- limiter.failureRatio
+            rate     <- limiter.rate
+            capacity <- backend.baseCapacity
+            _        <- recorder.recordSample(
+              aimdRps = toRps(rate),
+              backendCapacityRps = toRps(capacity),
+              observedFailureRatio = observed
+            )
+          } yield ()
 
-            callBackend.foreverM.background
-              .replicateA_(NumberOfClients)
-              .surround((takeSample >> IO.sleep(SamplePeriod)).foreverM.background.surround(drive))
-          }
-      }
-      samples        <- samplesRef.get
-      rateEvents     <- rateEventsRef.get
-      gradientEvents <- gradientEventsRef.get
-    } yield Result(
-      scenario = scenario,
-      samples = samples,
-      rateEvents = rateEvents,
-      gradientEvents = gradientEvents
-    )
+        _ <- callBackend.foreverM.background
+          .replicateA_(NumberOfClients)
+
+        _ <- (takeSample >> IO.sleep(SamplePeriod)).foreverM.background
+      } yield ()
+
+      _      <- simulation.surround(IO.sleep(scenario.totalDuration))
+      result <- recorder.result(scenario)
+    } yield result
 
   private def toRps(rate: Rate): Double =
     rate.requests.toDouble / rate.period.toUnit(TimeUnit.SECONDS)
+
+  /** Mutable, in-flight recording for a single run: the sampled timeseries, the discrete control-loop events, and the
+    * admitted-request counter used to derive throughput.
+    */
+  final class Recorder private (
+      startNanos: FiniteDuration,
+      samplesRef: Ref[IO, Vector[Sample]],
+      rateEventsRef: Ref[IO, Vector[(Long, Double)]],
+      gradientEventsRef: Ref[IO, Vector[(Long, FailureGradient)]],
+      admittedRef: Ref[IO, Long],
+      lastSampleRef: Ref[IO, (Long, Long)]
+  ) {
+
+    private val elapsedMillis: IO[Long] = IO.monotonic.map(now => (now - startNanos).toMillis)
+
+    val countAdmitted: IO[Unit] = admittedRef.update(_ + 1L)
+
+    def recordRate(rps: Double): IO[Unit] =
+      elapsedMillis.flatMap(ms => rateEventsRef.update(_ :+ (ms, rps)))
+
+    def recordGradient(event: FailureGradient): IO[Unit] =
+      elapsedMillis.flatMap(ms => gradientEventsRef.update(_ :+ (ms, event)))
+
+    /** Append a sample, deriving admitted throughput from the delta since the previous sample. */
+    def recordSample(aimdRps: Double, backendCapacityRps: Double, observedFailureRatio: Double): IO[Unit] =
+      for {
+        now      <- IO.monotonic
+        admitted <- admittedRef.get
+        prev     <- lastSampleRef.getAndSet((now.toNanos, admitted))
+        (prevNanos, prevAdmitted) = prev
+        dtSeconds                 = (now.toNanos - prevNanos).toDouble / 1e9
+        admittedRps               = if (dtSeconds > 0.0) (admitted - prevAdmitted).toDouble / dtSeconds else 0.0
+        _ <- samplesRef.update(
+          _ :+ Sample(
+            elapsedMillis = (now - startNanos).toMillis,
+            aimdRps = aimdRps,
+            admittedRps = admittedRps,
+            backendCapacityRps = backendCapacityRps,
+            observedFailureRatio = observedFailureRatio
+          )
+        )
+      } yield ()
+
+    def result(scenario: Scenario): IO[Result] =
+      for {
+        samples        <- samplesRef.get
+        rateEvents     <- rateEventsRef.get
+        gradientEvents <- gradientEventsRef.get
+      } yield Result(
+        scenario = scenario,
+        samples = samples,
+        rateEvents = rateEvents,
+        gradientEvents = gradientEvents
+      )
+  }
+
+  object Recorder {
+    val create: IO[Recorder] =
+      for {
+        startNanos        <- IO.monotonic
+        samplesRef        <- Ref[IO].of(Vector.empty[Sample])
+        rateEventsRef     <- Ref[IO].of(Vector.empty[(Long, Double)])
+        gradientEventsRef <- Ref[IO].of(Vector.empty[(Long, FailureGradient)])
+        admittedRef       <- Ref[IO].of(0L)
+        lastSampleRef     <- Ref[IO].of((startNanos.toNanos, 0L))
+      } yield new Recorder(
+        startNanos = startNanos,
+        samplesRef = samplesRef,
+        rateEventsRef = rateEventsRef,
+        gradientEventsRef = gradientEventsRef,
+        admittedRef = admittedRef,
+        lastSampleRef = lastSampleRef
+      )
+  }
 
   /** One sampled point of a closed-loop run.
     *
