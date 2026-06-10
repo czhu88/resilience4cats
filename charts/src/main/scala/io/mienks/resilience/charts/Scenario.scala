@@ -7,7 +7,7 @@ import io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter.{Config, Hys
 import scala.concurrent.duration._
 
 /** A closed-loop run against an [[io.mienks.resilience.adaptiveratelimiter.AdaptiveRateLimiter]]: a workload offers
-  * load through the limiter to a [[Backend]] whose capacity follows `segments`, and failures emerge from the limiter
+  * load through the limiter to a [[Backend]] whose capacity follows `phases`, and failures emerge from the limiter
   * over-driving that capacity.
   *
   * @param name
@@ -16,21 +16,17 @@ import scala.concurrent.duration._
   *   one-line caption rendered on the chart
   * @param config
   *   limiter configuration for the run
-  * @param backendTiers
-  *   capacity tiers of the simulated backend (see [[Backend]])
-  * @param warmup
-  *   settle time at the first segment's capacity before the scripted capacity changes begin
-  * @param segments
-  *   ordered backend-capacity phases
+  * @param phases
+  *   ordered backend-capacity phases (see [[Backend.Phase]]); the head phase's duration includes the warmup
   */
 final case class Scenario(
     name: String,
     description: String,
     config: Config,
-    backendTiers: NonEmptyList[Backend.Tier],
-    warmup: FiniteDuration,
-    segments: List[Scenario.Segment]
-)
+    phases: NonEmptyList[Backend.Phase]
+) {
+  def totalDuration: FiniteDuration = phases.toList.map(_.duration).reduce(_ + _)
+}
 
 object Scenario {
 
@@ -41,6 +37,9 @@ object Scenario {
   // needs enough admitted requests (>= minNumberOfMeasurements) for the ratio to be meaningful.
   private val SlotDuration: FiniteDuration = 25.millis
   private val MeasurementBuckets: Int      = 4
+
+  // Settle time spent in the first phase before the scripted capacity changes begin; folded into each head duration.
+  private val Warmup: FiniteDuration = 500.millis
 
   private val Bands: NonEmptyList[HysteresisBand] = NonEmptyList.of(
     HysteresisBand(exit = 0.1, start = 0.3), // level 0: minor degradation
@@ -73,9 +72,8 @@ object Scenario {
       name = "congestion-sawtooth",
       description = "Constant backend capacity below maxRate: AIMD oscillates around it in the classic TCP sawtooth.",
       config = BaseConfig,
-      backendTiers = Backend.Single,
-      warmup = 500.millis,
-      segments = List(Segment(capacity = rps(200), duration = 7.seconds))
+      phases =
+        NonEmptyList.one(Backend.Phase(hardCeiling = rps(200), softCeilings = Nil, duration = Warmup + 7.seconds))
     )
 
   private val quickDegradation: Scenario =
@@ -83,11 +81,9 @@ object Scenario {
       name = "quick-degradation",
       description = "A sudden capacity drop trips a band and cuts the rate into a lower sawtooth around the capacity.",
       config = BaseConfig,
-      backendTiers = Backend.Single,
-      warmup = 500.millis,
-      segments = List(
-        Segment(capacity = Healthy, duration = 1.second),
-        Segment(capacity = rps(130), duration = 5.seconds)
+      phases = NonEmptyList.of(
+        Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = Warmup + 1.second),
+        Backend.Phase(hardCeiling = rps(130), softCeilings = Nil, duration = 5.seconds)
       )
     )
 
@@ -96,12 +92,10 @@ object Scenario {
       name = "degrade-then-recover",
       description = "After a capacity collapse and rate cut, restored capacity returns the backend to healthy and max.",
       config = BaseConfig,
-      backendTiers = Backend.Single,
-      warmup = 500.millis,
-      segments = List(
-        Segment(capacity = Healthy, duration = 1.second),
-        Segment(capacity = rps(130), duration = 4.seconds),
-        Segment(capacity = Healthy, duration = 5.seconds)
+      phases = NonEmptyList.of(
+        Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = Warmup + 1.second),
+        Backend.Phase(hardCeiling = rps(130), softCeilings = Nil, duration = 4.seconds),
+        Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = 5.seconds)
       )
     )
 
@@ -110,46 +104,41 @@ object Scenario {
       name = "slow-recovery",
       description = "Capacity recovers in steps; the limiter climbs back to a higher safe rate at each step.",
       config = BaseConfig,
-      backendTiers = Backend.Single,
-      warmup = 500.millis,
-      segments = List(
-        Segment(capacity = Healthy, duration = 1.second),
-        Segment(capacity = rps(130), duration = 2500.millis), // severe
-        Segment(capacity = rps(200), duration = 2500.millis), // partial
-        Segment(capacity = rps(320), duration = 2500.millis), // more headroom
-        Segment(capacity = Healthy, duration = 3.seconds)     // full clear
+      phases = NonEmptyList.of(
+        Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = Warmup + 1.second),
+        Backend.Phase(hardCeiling = rps(130), softCeilings = Nil, duration = 2500.millis), // severe
+        Backend.Phase(hardCeiling = rps(200), softCeilings = Nil, duration = 2500.millis), // partial
+        Backend.Phase(hardCeiling = rps(320), softCeilings = Nil, duration = 2500.millis), // more headroom
+        Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = 3.seconds)     // full clear
       )
     )
 
-  private val flapping: Scenario =
+  private val flapping: Scenario = {
+    // Degraded windows longer than recovery windows so the cuts dominate and the rate ratchets down.
+    val cycle = List(
+      Backend.Phase(hardCeiling = rps(60), softCeilings = Nil, duration = 1500.millis),
+      Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = 800.millis)
+    )
     Scenario(
       name = "flapping",
       description = "Capacity flaps between healthy and degraded: compounding cuts ratchet the rate toward the floor.",
       config = BaseConfig,
-      backendTiers = Backend.Single,
-      warmup = 500.millis,
-      // Degraded windows longer than recovery windows so the cuts dominate and the rate ratchets down.
-      segments = List
-        .fill(5)(
-          List(
-            Segment(capacity = rps(60), duration = 1500.millis),
-            Segment(capacity = Healthy, duration = 800.millis)
-          )
-        )
-        .flatten
+      phases = NonEmptyList(
+        Backend.Phase(hardCeiling = rps(60), softCeilings = Nil, duration = Warmup + 1500.millis),
+        Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = 800.millis) :: List.fill(4)(cycle).flatten
+      )
     )
+  }
 
   private val slowDegradation: Scenario =
     Scenario(
       name = "slow-degradation",
       description = "Capacity steps down gradually; the limiter re-discovers a lower safe rate at each step.",
       config = BaseConfig,
-      backendTiers = Backend.Single,
-      warmup = 500.millis,
-      segments = List(
-        Segment(capacity = Healthy, duration = 1.second),
-        Segment(capacity = rps(150), duration = 4.seconds), // mild: a sawtooth around the new capacity
-        Segment(capacity = rps(70), duration = 4.seconds)   // lower: a tighter sawtooth around the new capacity
+      phases = NonEmptyList.of(
+        Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = Warmup + 1.second),
+        Backend.Phase(hardCeiling = rps(150), softCeilings = Nil, duration = 4.seconds), // mild sawtooth around it
+        Backend.Phase(hardCeiling = rps(70), softCeilings = Nil, duration = 4.seconds)   // tighter sawtooth around it
       )
     )
 
@@ -158,16 +147,23 @@ object Scenario {
       name = "graded-degradation",
       description = "A two-tier backend (soft + hard ceiling) produces two distinct failure levels across the bands.",
       config = BaseConfig,
-      // Soft ceiling at half the base capacity fails 50% of its overflow; the hard ceiling at the base always fails.
-      backendTiers = NonEmptyList.of(
-        Backend.Tier(relativeCapacity = 0.5, failProbability = 0.5),
-        Backend.Tier(relativeCapacity = 1.0, failProbability = 1.0)
-      ),
-      warmup = 500.millis,
-      segments = List(
-        Segment(capacity = Healthy, duration = 1.second),
-        Segment(capacity = rps(80), duration = 5.seconds), // severe: the soft then hard ceiling trip both bands
-        Segment(capacity = Healthy, duration = 4.seconds)  // restored: the backend recovers and the rate climbs back
+      // Soft ceiling (half the hard ceiling) fails 50% of its overflow; over the hard ceiling, calls always fail.
+      phases = NonEmptyList.of(
+        Backend.Phase(
+          hardCeiling = Healthy,
+          softCeilings = List(Backend.SoftCeiling(capacity = rps(250), failProbability = 0.5)),
+          duration = Warmup + 1.second
+        ),
+        Backend.Phase(
+          hardCeiling = rps(80),
+          softCeilings = List(Backend.SoftCeiling(capacity = rps(40), failProbability = 0.5)),
+          duration = 5.seconds // soft then hard ceiling trip both bands
+        ),
+        Backend.Phase(
+          hardCeiling = Healthy,
+          softCeilings = List(Backend.SoftCeiling(capacity = rps(250), failProbability = 0.5)),
+          duration = 4.seconds // restored: the backend recovers and the rate climbs back
+        )
       )
     )
 
@@ -180,9 +176,4 @@ object Scenario {
     slowDegradation,
     gradedDegradation
   )
-
-  /** One leg of a scenario: hold the simulated backend's base capacity at `capacity` for `duration`. A lower capacity
-    * is a degraded backend; raising it again is recovery.
-    */
-  final case class Segment(capacity: Rate, duration: FiniteDuration)
 }

@@ -44,35 +44,38 @@ The whole point of the adaptive rate limiter is to *discover* the rate a downstr
 that, we need a backend whose failure rate depends on how hard we hit it — otherwise the control loop has nothing to
 react to. That backend is modeled in [`Backend.scala`](src/main/scala/io/mienks/resilience/charts/Backend.scala).
 
-The backend is built from one or more **capacity tiers**. Each tier is a token bucket (the project's own
-[`DynamicRateLimiter`](../rate-limiter)) whose refill rate is a multiple of the backend's *base capacity*:
+A backend phase is a **hard ceiling** plus zero or more **soft ceilings**, each a token bucket (the project's own
+[`DynamicRateLimiter`](../rate-limiter)):
 
-- Every call consumes one token from every tier.
-- A tier whose bucket is **empty** (the offered load has overflowed its capacity) contributes its `failProbability`.
-- The call fails with the **most severe** `failProbability` among the overflowed tiers.
+- The **hard ceiling** is the base, sustainable rate. Any call admitted *above* it fails outright (100%).
+- Each **soft ceiling** (`SoftCeiling(capacity, failProbability)`, with `failProbability < 1.0`) is a tighter rate
+  that fails only a *fraction* of the calls that overflow it.
+- Every call consumes one token from the hard bucket and every soft bucket, and fails with the **most severe**
+  `failProbability` among the ceilings it overflowed (the hard ceiling contributing `1.0`).
 
-So the observed failure ratio is an emergent property of the rate the limiter admits — close the bucket and failures
+So the observed failure ratio is an emergent property of the rate the limiter admits — overflow a ceiling and failures
 appear, back off and they clear. This is what closes the loop:
 
 ```
-AIMD rate estimate ──admits requests──▶ Backend (token-bucket tiers)
+AIMD rate estimate ──admits requests──▶ Backend (hard + soft ceilings)
         ▲                                      │
         └────────── failure ratio ◀────────────┘
 ```
 
 Two backend shapes are used:
 
-- **Single tier** (`Backend.Single`): one bucket at the base capacity whose overflow always fails. The failure ratio
-  is essentially `1 - capacity/admitted` — a hard ceiling.
-- **Graded** (multiple tiers): e.g. a *soft* ceiling at half the base capacity that fails 50% of its overflow, plus a
-  *hard* ceiling at the base that always fails. This produces two distinct failure levels and trips both hysteresis
-  bands.
+- **Hard ceiling only** (`softCeilings = Nil`): one bucket at the base capacity whose overflow always fails. The
+  failure ratio is essentially `1 - capacity/admitted`.
+- **Graded** (a soft ceiling under the hard one): e.g. over `rps(80)` fail 100%, but already over the smaller
+  `rps(40)` fail 50%. This produces two distinct failure levels and trips both hysteresis bands.
 
-A [`Scenario`](src/main/scala/io/mienks/resilience/charts/Scenario.scala) scripts the backend's base capacity over
-time as a list of `Segment(capacity, duration)`. A capacity *below* the limiter's `maxRate` is a degraded backend;
-raising it again is recovery. [`SimulationRunner`](src/main/scala/io/mienks/resilience/charts/SimulationRunner.scala)
-offers load through `limiter.protect`, samples the limiter's rate/failure-ratio on a fixed cadence, and records every
-control-loop event.
+A [`Scenario`](src/main/scala/io/mienks/resilience/charts/Scenario.scala) is the limiter config plus a
+`NonEmptyList[Backend.Phase]` — the backend's capacity over time. A hard ceiling *below* the limiter's `maxRate` is a
+degraded backend; raising it again is recovery. The whole schedule is handed to `Backend.create` up front, and an
+internal fiber walks it, reconfiguring the ceilings as each phase begins (there is no external capacity mutator). A
+shared `Warmup` settle time is folded into the first phase's duration.
+[`SimulationRunner`](src/main/scala/io/mienks/resilience/charts/SimulationRunner.scala) offers load through
+`limiter.protect`, samples the limiter's rate/failure-ratio on a fixed cadence, and records every control-loop event.
 
 > Note: rates are kept in the hundreds of rps even though the time scale is compressed to a few seconds. The closed
 > loop derives the failure ratio from requests the limiter *actually admits*, so each measurement window needs enough
