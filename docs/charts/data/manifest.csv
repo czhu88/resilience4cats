@@ -1,0 +1,8 @@
+scenario,description,samples_file,events_file
+congestion-sawtooth,Constant backend capacity below maxRate: AIMD oscillates around it in the classic TCP sawtooth.,congestion-sawtooth-samples.csv,congestion-sawtooth-events.csv
+quick-degradation,A sudden capacity drop trips a band and cuts the rate into a lower sawtooth around the capacity.,quick-degradation-samples.csv,quick-degradation-events.csv
+degrade-then-recover,"After a capacity collapse and rate cut, restored capacity returns the backend to healthy and max.",degrade-then-recover-samples.csv,degrade-then-recover-events.csv
+slow-recovery,Capacity recovers in steps; the limiter climbs back to a higher safe rate at each step.,slow-recovery-samples.csv,slow-recovery-events.csv
+flapping,Capacity flaps between healthy and degraded: compounding cuts ratchet the rate toward the floor.,flapping-samples.csv,flapping-events.csv
+slow-degradation,Capacity steps down gradually; the limiter re-discovers a lower safe rate at each step.,slow-degradation-samples.csv,slow-degradation-events.csv
+graded-degradation,A two-tier backend (soft + hard ceiling) produces two distinct failure levels across the bands.,graded-degradation-samples.csv,graded-degradation-events.csv

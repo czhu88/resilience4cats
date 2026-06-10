@@ -3,7 +3,8 @@
 [![Latest Release](https://img.shields.io/github/v/release/mmienko/resilience4cats?sort=semver)](https://github.com/mmienko/resilience4cats/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.mmienko/resilience4cats_2.13)](https://central.sonatype.com/artifact/io.github.mmienko/resilience4cats_2.13)
 
-Resilience structures not included in Cats Effect standard library, such as `CircuitBreaker` and `RateLimiter`.
+Resilience structures not included in Cats Effect standard library, such as `CircuitBreaker`, `RateLimiter`, 
+`DynamicRateLimiter`, and `AdaptiveRateLimiter`.
 
 ## Installation
 
@@ -204,6 +205,17 @@ AdaptiveRateLimiter.start[IO](
 The categorizer emits `FailureGradient.Worsening(level)` (one event per band crossed on worsening),
 `FailureGradient.Recovering(fromLevel)` on partial recovery, and `FailureGradient.Recovered` on full recovery. The AIMD
 controller multiplicatively decreases only on `Worsening` and additively increases on a fixed tick.
+
+### Behavior
+
+Driven against a simulated backend whose failure rate depends on the offered load, the AIMD loop produces the classic
+TCP-style sawtooth: additive increase probes for more throughput until the backend overloads, then a multiplicative
+decrease backs off.
+
+![congestion-sawtooth](docs/images/adaptive-rate-limiter/congestion-sawtooth.png)
+
+See [`charts/`](charts/README.md) for how these charts are generated and for more scenarios (degradation, recovery,
+flapping, and graded multi-tier backends).
 
 ## Circuit-Breaker
 The `circuit-breaker` models a concurrent state machine used to provide stability and prevent cascading failures in

@@ -13,7 +13,7 @@ ThisBuild / developers   := List(
 ThisBuild / description := "Resilience structures not included in Cats Effect standard library, such as `CircuitBreaker` and `RateLimiter`."
 
 lazy val root = (project in file("."))
-  .aggregate(core, circuitBreaker, benchmarks, rateLimiter, tokenBucket, adaptiveRateLimiter, resilience4cats)
+  .aggregate(core, circuitBreaker, benchmarks, rateLimiter, tokenBucket, adaptiveRateLimiter, charts, resilience4cats)
   .settings(
     name            := "resilience4cats-root",
     publishArtifact := false,
@@ -95,6 +95,20 @@ lazy val adaptiveRateLimiter = project
     testFrameworks += new TestFramework("munit.Framework")
   )
   .dependsOn(rateLimiter)
+
+// Non-published module that drives the AdaptiveRateLimiter through scripted scenarios and emits CSV timeseries
+// for the matplotlib charts under charts/scripts/render.py.
+lazy val charts = project
+  .in(file("charts"))
+  .settings(
+    name           := "charts",
+    publish / skip := true,
+    libraryDependencies ++= Seq(
+      "org.typelevel" %% "cats-effect" % CatsEffectVersion,
+      "co.fs2"        %% "fs2-core"    % Fs2Version
+    )
+  )
+  .dependsOn(adaptiveRateLimiter)
 
 lazy val tokenBucket = project
   .in(file("token-bucket"))
