@@ -1,8 +1,16 @@
 # Charts
 
-Behavior charts for the [`adaptive-rate-limiter`](../adaptive-rate-limiter). This module runs the limiter through a
-set of closed-loop scenarios against a *simulated* backend, exports the resulting timeseries as CSV, and renders them
-to PNG with matplotlib. The images are what you see embedded in the project documentation.
+Behavior charts for the [`adaptive-rate-limiter`](../adaptive-rate-limiter) and the
+[`admission-controller`](../admission-controller). This module runs each structure through a set of closed-loop
+scenarios against a *simulated* backend, exports the resulting timeseries as CSV, and renders them to PNG with
+matplotlib. The images are what you see embedded in the project documentation.
+
+There are two independent pipelines that share the same simulated [`Backend`](src/main/scala/io/mienks/resilience/charts/Backend.scala)
+but write to separate data and image directories so they live side by side:
+
+- **AdaptiveRateLimiter** (`charts/run` -> `docs/charts/data/`, rendered by `render.py`). Documented below.
+- **AdmissionController** (`charts/runMain ...GenerateAdmissionCharts` -> `docs/charts/admission-data/`, rendered by
+  `render_admission.py`). See [AdmissionController charts](#admissioncontroller-charts).
 
 This is a documentation/tooling module only — it is not published (`publish / skip := true`).
 
@@ -123,3 +131,52 @@ Capacity steps down gradually; the limiter re-discovers a lower safe rate at eac
 A two-tier backend (soft + hard ceiling) produces two distinct failure levels across the hysteresis bands.
 
 ![graded-degradation](../docs/images/adaptive-rate-limiter/graded-degradation.png)
+
+## AdmissionController charts
+
+The [`admission-controller`](../admission-controller) charts tell a different story than the rate limiter. Instead of
+discovering and tracking a *rate*, the controller probabilistically sheds load so the backend's accepted goodput stays
+near its capacity. Under overload it keeps the admitted load near `k * capacity` (with the SRE default `k = 2.0`),
+holding a smooth plateau rather than the AIMD sawtooth, and on recovery the rejection probability returns to zero
+because `k > 1` guarantees the gate fully reopens.
+
+### Generate and render
+
+```bash
+sbt "charts/runMain io.mienks.resilience.charts.GenerateAdmissionCharts"   # -> docs/charts/admission-data/
+python charts/scripts/render_admission.py                                  # -> docs/images/admission-controller/
+```
+
+The Scala app writes `<scenario>-samples.csv` (`elapsed_ms`, `offered_rps`, `admitted_rps`, `accepted_rps`,
+`capacity_rps`, `rejection_probability`) and a `manifest.csv`. There is no events file — the controller has no
+discrete state transitions to mark. `render_admission.py` is data-driven the same way `render.py` is.
+
+The same simulated backend is reused: any call admitted *above* the hard ceiling is "throttled" (a failure), which is
+exactly the downstream-overload signal the controller sheds against. Each scenario holds the offered load constant and
+well above the degraded capacities, then schedules capacity over time via `Backend.Phase`.
+
+Each chart plots, on the left axis, the **client input rate** (load before the gate), the **client allowed rate**
+(what the controller admits), the **backend actual rate** (goodput, allowed minus throttled), and the **backend
+capacity** (dashed); on the right axis the controller's **rejection probability** in `[0, 1]`.
+
+### steady-overload
+Constant capacity below offered load: the controller sheds the excess, holding admitted near `k*capacity` and goodput
+near capacity — a smooth plateau, no sawtooth.
+
+![steady-overload](../docs/images/admission-controller/steady-overload.png)
+
+### capacity-drop
+A sudden capacity drop pushes the rejection probability from zero up to a steady shedding level.
+
+![capacity-drop](../docs/images/admission-controller/capacity-drop.png)
+
+### drop-then-recover
+After a capacity collapse and shedding, restored capacity drives the rejection probability back to zero (`k > 1`
+guarantees the gate fully reopens).
+
+![drop-then-recover](../docs/images/admission-controller/drop-then-recover.png)
+
+### slow-degradation
+Capacity steps down gradually; the rejection probability steps up to match each lower ceiling.
+
+![slow-degradation](../docs/images/admission-controller/slow-degradation.png)

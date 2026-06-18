@@ -19,3 +19,6 @@ dumps/
 
 ### Scala ###
 .bsp/
+
+### Python (charts renderer) ###
+.venv/

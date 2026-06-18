@@ -119,19 +119,22 @@ lazy val admissionController = project
   )
   .dependsOn(core)
 
-// Non-published module that drives the AdaptiveRateLimiter through scripted scenarios and emits CSV timeseries
-// for the matplotlib charts under charts/scripts/render.py.
+// Non-published module that drives the AdaptiveRateLimiter and AdmissionController through scripted scenarios and
+// emits CSV timeseries for the matplotlib charts under charts/scripts/. `charts/run` defaults to the
+// AdaptiveRateLimiter pipeline (GenerateCharts); the AdmissionController pipeline runs via
+// `charts/runMain io.mienks.resilience.charts.GenerateAdmissionCharts`.
 lazy val charts = project
   .in(file("charts"))
   .settings(
-    name           := "charts",
-    publish / skip := true,
+    name                := "charts",
+    publish / skip      := true,
+    Compile / mainClass := Some("io.mienks.resilience.charts.GenerateCharts"),
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect" % CatsEffectVersion,
       "co.fs2"        %% "fs2-core"    % Fs2Version
     )
   )
-  .dependsOn(adaptiveRateLimiter)
+  .dependsOn(adaptiveRateLimiter, admissionController)
 
 lazy val tokenBucket = project
   .in(file("token-bucket"))

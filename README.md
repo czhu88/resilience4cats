@@ -257,6 +257,15 @@ this is just the plain failure ratio, but `k = 1` is only marginally stable and 
 after the backend recovers; `k > 1` guarantees the controller fully reopens once the backend is healthy and adds a dead
 zone so transient failures don't trigger shedding. Configure `k` and the sliding window via `AdmissionController.Config`.
 
+### Behavior
+These charts drive the controller through a simulated backend (see [`charts`](charts)). Under overload it sheds the
+excess so the client allowed rate holds near `k * capacity` and the backend actual rate (goodput) stays near capacity,
+and on recovery the rejection probability returns to zero.
+
+![steady-overload](docs/images/admission-controller/steady-overload.png)
+
+![drop-then-recover](docs/images/admission-controller/drop-then-recover.png)
+
 ## Circuit-Breaker
 The `circuit-breaker` models a concurrent state machine used to provide stability and prevent cascading failures in
 distributed systems. 
