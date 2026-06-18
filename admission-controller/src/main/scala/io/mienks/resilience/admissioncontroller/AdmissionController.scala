@@ -1,11 +1,11 @@
 package io.mienks.resilience.admissioncontroller
 
 import cats.effect.std.Random
-import cats.effect.{Async, Ref, Resource, Sync}
+import cats.effect.{Ref, Sync}
 import cats.syntax.all._
 import cats.{Applicative, ApplicativeThrow, Monad}
-import io.mienks.resilience.{CountBasedSlidingWindowMeasurements, Measurements, TimeBasedSlidingWindowMeasurements}
 import io.mienks.resilience.Measurements.Snapshot
+import io.mienks.resilience.{CountBasedSlidingWindowMeasurements, Measurements, TimeBasedSlidingWindowMeasurements}
 
 import scala.concurrent.duration._
 import scala.util.control.NoStackTrace
