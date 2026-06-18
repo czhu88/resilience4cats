@@ -89,10 +89,7 @@ object AdmissionController {
           case MeasurementStrategy.TimeBasedSlidingWindow(numberOfBuckets, bucketSize, minNumberOfCalls) =>
             for {
               _ <- check(numberOfBuckets > 0, s"numberOfBuckets must be positive, got: $numberOfBuckets")
-              _ <- check(
-                bucketSize >= 10.milliseconds,
-                s"bucketSize must be at least 10 milliseconds, got: $bucketSize"
-              )
+              _ <- check(bucketSize > Duration.Zero, s"bucketSize must be positive, got: $bucketSize")
               _ <- check(minNumberOfCalls > 0, s"minNumberOfCalls must be positive, got: $minNumberOfCalls")
             } yield ()
         }

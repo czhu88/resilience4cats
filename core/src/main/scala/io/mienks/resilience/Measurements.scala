@@ -166,7 +166,7 @@ object SampledTimeBasedSlidingWindowMeasurements {
   ): F[SampledTimeBasedSlidingWindowMeasurements[F]] =
     for {
       _            <- Sync[F].delay(require(numberOfBuckets > 0, "numberOfBuckets > 0"))
-      _            <- Sync[F].delay(require(bucketSize >= 10.milliseconds, "bucketSize >= 10.milliseconds"))
+      _            <- Sync[F].delay(require(bucketSize > Duration.Zero, "bucketSize > Duration.Zero"))
       now          <- Clock[F].monotonic
       measurements <- Sync[F].delay {
         new SampledTimeBasedSlidingWindowMeasurements[F](
@@ -303,7 +303,7 @@ object TimeBasedSlidingWindowMeasurements {
   ): F[TimeBasedSlidingWindowMeasurements[F]] =
     for {
       _        <- Sync[F].delay(require(numberOfBuckets > 0, "numberOfBuckets > 0"))
-      _        <- Sync[F].delay(require(bucketSize >= 10.milliseconds, "bucketSize >= 10.milliseconds"))
+      _        <- Sync[F].delay(require(bucketSize > Duration.Zero, "bucketSize > Duration.Zero"))
       now      <- Clock[F].monotonic
       stateRef <- Ref[F].of(
         State.initial(
