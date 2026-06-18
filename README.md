@@ -3,8 +3,8 @@
 [![Latest Release](https://img.shields.io/github/v/release/mmienko/resilience4cats?sort=semver)](https://github.com/mmienko/resilience4cats/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.mmienko/resilience4cats_2.13)](https://central.sonatype.com/artifact/io.github.mmienko/resilience4cats_2.13)
 
-Resilience structures not included in Cats Effect standard library, such as `CircuitBreaker`, `RateLimiter`, 
-`DynamicRateLimiter`, and `AdaptiveRateLimiter`.
+Resilience structures not included in Cats Effect standard library, such as `CircuitBreaker`, `RateLimiter`,
+`DynamicRateLimiter`, `AdaptiveRateLimiter`, and `AdmissionController`.
 
 ## Installation
 
@@ -18,6 +18,7 @@ libraryDependencies += "io.github.mmienko" %% "resilience4cats" % "<version>"
 libraryDependencies += "io.github.mmienko" %% "circuit-breaker" % "<version>"
 libraryDependencies += "io.github.mmienko" %% "rate-limiter" % "<version>"
 libraryDependencies += "io.github.mmienko" %% "adaptive-rate-limiter" % "<version>"
+libraryDependencies += "io.github.mmienko" %% "admission-controller" % "<version>"
 ```
 
 ## Rate-Limiter
@@ -216,6 +217,45 @@ decrease backs off.
 
 See [`charts/`](charts/README.md) for how these charts are generated and for more scenarios (degradation, recovery,
 flapping, and graded multi-tier backends).
+
+## Admission-Controller
+The `admission-controller` implements probabilistic client-side throttling from the
+[SRE adaptive throttling pattern](https://sre.google/sre-book/handling-overload/). It tracks recent requests and
+backend accepts over a sliding window, then locally sheds a proportional share of traffic when the backend is
+rejecting too many requests.
+
+```scala
+trait AdmissionController[F[_]] {
+  def allow: F[Boolean]
+  def record(isFailure: Boolean): F[Measurements.Snapshot]
+  def rejectionProbability: F[Double]
+}
+```
+
+### Usage
+Use `allow` and `record` directly, or import syntax to gate and record in one step. Local rejections are recorded as
+failures so the controller sees them as non-accepts and stabilizes through the sliding window.
+
+```scala
+import cats.effect._
+import io.mienks.resilience.admissioncontroller.AdmissionController
+import io.mienks.resilience.admissioncontroller.AdmissionController.syntax._
+
+AdmissionController[IO]().flatMap { controller =>
+  controller.protect(
+    fa = callProtectedSink,
+    isFailure = _.isThrottledByBackend,
+    orElse = RejectedLocally,
+  )
+}
+```
+
+### Tuning
+Each request is rejected with probability `max(0, (requests - k * accepts) / (requests + 1))` over the window. The `k`
+parameter (default `2.0`) tunes how aggressively load is shed: higher `k` sheds less, lower `k` sheds more. At `k = 1`
+this is just the plain failure ratio, but `k = 1` is only marginally stable and can stay latched while shedding even
+after the backend recovers; `k > 1` guarantees the controller fully reopens once the backend is healthy and adds a dead
+zone so transient failures don't trigger shedding. Configure `k` and the sliding window via `AdmissionController.Config`.
 
 ## Circuit-Breaker
 The `circuit-breaker` models a concurrent state machine used to provide stability and prevent cascading failures in

@@ -13,6 +13,8 @@ trait Measurements[F[_]] {
 
   def record(isFailure: Boolean): F[Snapshot]
 
+  def peek: F[Snapshot]
+
   def reset: F[Unit]
 }
 
@@ -205,6 +207,9 @@ final class CountBasedSlidingWindowMeasurements[F[_]: Sync] private (
   override def record(isFailure: Boolean): F[Snapshot] =
     stateRef.modify(_.record(isFailure))
 
+  override def peek: F[Snapshot] =
+    stateRef.get.map(_.snapshot)
+
   override def reset: F[Unit] =
     stateRef.update(_.reset)
 }
@@ -239,13 +244,16 @@ object CountBasedSlidingWindowMeasurements {
           totalMeasurements = newTotalMeasurements,
           totalFailures = newFailures
         ),
-        Snapshot(
-          totalMeasurements = newTotalMeasurements,
-          totalFailures = newFailures,
-          isInitialized = newTotalMeasurements >= minNumberOfCalls
-        )
+        copy(totalMeasurements = newTotalMeasurements, totalFailures = newFailures).snapshot
       )
     }
+
+    def snapshot: Snapshot =
+      Snapshot(
+        totalMeasurements = totalMeasurements,
+        totalFailures = totalFailures,
+        isInitialized = totalMeasurements >= minNumberOfCalls
+      )
 
     def reset: State = State.empty(windowSize, minNumberOfCalls)
   }
@@ -270,6 +278,14 @@ final class TimeBasedSlidingWindowMeasurements[F[_]: Sync] private (
   override def record(isFailure: Boolean): F[Snapshot] =
     Clock[F].monotonic.map(_.toNanos).flatMap { now =>
       stateRef.modify(_.record(isFailure, now))
+    }
+
+  override def peek: F[Snapshot] =
+    Clock[F].monotonic.map(_.toNanos).flatMap { now =>
+      stateRef.modify { state =>
+        val advanced = state.advance(now = now)
+        (advanced, advanced.snapshot)
+      }
     }
 
   override def reset: F[Unit] =
@@ -319,6 +335,18 @@ object TimeBasedSlidingWindowMeasurements {
   ) {
 
     def record(isFailure: Boolean, now: Long): (State, Snapshot) = {
+      val advanced  = advance(now)
+      val curBucket = advanced.buckets(advanced.index).addMeasurement(isFailure)
+      val updated   = advanced.copy(
+        buckets = advanced.buckets.updated(advanced.index, curBucket),
+        totalMeasurements = advanced.totalMeasurements + 1,
+        totalFailures = advanced.totalFailures + (if (isFailure) 1 else 0)
+      )
+
+      (updated, updated.snapshot)
+    }
+
+    def advance(now: Long): State = {
       val timeBucketsSinceLastUpdate = (now - buckets(index).createdAt) / bucketLengthInNanos
 
       var curIndex             = index
@@ -327,9 +355,9 @@ object TimeBasedSlidingWindowMeasurements {
       var curBuckets           = buckets
 
       if (timeBucketsSinceLastUpdate > 0) {
-        var bucketsToMoveBy = math.min(timeBucketsSinceLastUpdate, numberOfBuckets)
+        var bucketsToMoveBy = math.min(timeBucketsSinceLastUpdate, numberOfBuckets.toLong)
         do {
-          bucketsToMoveBy -= 1
+          bucketsToMoveBy -= 1L
           curIndex = (curIndex + 1) % numberOfBuckets
           val bucket = curBuckets(curIndex)
           curTotalMeasurements -= bucket.total
@@ -338,24 +366,20 @@ object TimeBasedSlidingWindowMeasurements {
         } while (bucketsToMoveBy > 0)
       }
 
-      curBuckets = curBuckets.updated(curIndex, curBuckets(curIndex).addMeasurement(isFailure))
-      curTotalMeasurements += 1
-      if (isFailure) curTotalFailures += 1
-
-      (
-        copy(
-          buckets = curBuckets,
-          index = curIndex,
-          totalMeasurements = curTotalMeasurements,
-          totalFailures = curTotalFailures
-        ),
-        Snapshot(
-          totalMeasurements = curTotalMeasurements,
-          totalFailures = curTotalFailures,
-          isInitialized = curTotalMeasurements >= minNumberOfCalls
-        )
+      copy(
+        buckets = curBuckets,
+        index = curIndex,
+        totalMeasurements = curTotalMeasurements,
+        totalFailures = curTotalFailures
       )
     }
+
+    def snapshot: Snapshot =
+      Snapshot(
+        totalMeasurements = totalMeasurements,
+        totalFailures = totalFailures,
+        isInitialized = totalMeasurements >= minNumberOfCalls
+      )
 
     def reset(now: Long): State =
       State.initial(numberOfBuckets, bucketLengthInNanos, minNumberOfCalls, now)
