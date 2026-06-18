@@ -107,10 +107,40 @@ object AdmissionScenario {
       )
     )
 
+  // Variants that hold the capacity profile fixed but change `k` to show how it sets the admitted plateau (~k*capacity)
+  // and the steady shedding level. k=1 is the plain failure ratio: admitted collapses to capacity itself.
+  private val steadyOverloadK1: AdmissionScenario =
+    steadyOverload.copy(
+      name = "steady-overload-k1",
+      description =
+        "k=1 (the plain failure ratio): admitted collapses to around capacity with no wasted backend work, but the " +
+          "loop is only marginally stable - the rate is jittery and often under-utilizes the backend.",
+      config = BaseConfig.copy(k = 1.0)
+    )
+
+  private val steadyOverloadK15: AdmissionScenario =
+    steadyOverload.copy(
+      name = "steady-overload-k1.5",
+      description =
+        "k=1.5: a middle ground - the admitted plateau settles around 1.5x capacity, between the k=1 and k=2 cases.",
+      config = BaseConfig.copy(k = 1.5)
+    )
+
+  private val dropThenRecoverK15: AdmissionScenario =
+    dropThenRecover.copy(
+      name = "drop-then-recover-k1.5",
+      description =
+        "k=1.5: a lower admitted plateau than k=2 while overloaded, and the gate still fully reopens on recovery.",
+      config = BaseConfig.copy(k = 1.5)
+    )
+
   val all: List[AdmissionScenario] = List(
     steadyOverload,
     capacityDrop,
     dropThenRecover,
-    slowDegradation
+    slowDegradation,
+    steadyOverloadK1,
+    steadyOverloadK15,
+    dropThenRecoverK15
   )
 }

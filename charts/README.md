@@ -180,3 +180,28 @@ guarantees the gate fully reopens).
 Capacity steps down gradually; the rejection probability steps up to match each lower ceiling.
 
 ![slow-degradation](../docs/images/admission-controller/slow-degradation.png)
+
+### Comparing `k`
+
+The `k` parameter sets how aggressively the controller sheds. These runs hold the same capacity profile fixed and vary
+only `k`, so the effect is isolated. The admitted plateau lands around `k * capacity`: higher `k` admits more (and
+tolerates more backend-side throttling) while lower `k` sheds harder. Compare against the default `k = 2.0`
+[steady-overload](#steady-overload) and [drop-then-recover](#drop-then-recover) above.
+
+#### steady-overload-k1
+`k = 1` is the plain failure ratio. Admitted collapses to around capacity with no wasted backend work, but the loop is
+only marginally stable: the rate is jittery and often dips below capacity, under-utilizing the backend.
+
+![steady-overload-k1](../docs/images/admission-controller/steady-overload-k1.png)
+
+#### steady-overload-k1.5
+`k = 1.5` is the middle ground: the admitted plateau settles around `1.5 * capacity`, between the `k = 1` and `k = 2`
+cases, while goodput stays near capacity.
+
+![steady-overload-k1.5](../docs/images/admission-controller/steady-overload-k1.5.png)
+
+#### drop-then-recover-k1.5
+`k = 1.5` over the recovery profile: a lower admitted plateau than `k = 2` while overloaded, and the gate still fully
+reopens once capacity is restored.
+
+![drop-then-recover-k1.5](../docs/images/admission-controller/drop-then-recover-k1.5.png)

@@ -250,6 +250,11 @@ AdmissionController[IO]().flatMap { controller =>
 }
 ```
 
+### Behavior
+These charts drive the controller through a simulated backend (see [`charts`](charts)). Under overload it sheds the
+excess so the client allowed rate holds near `k * capacity` and the backend actual rate (goodput) stays near capacity,
+and on recovery the rejection probability returns to zero.
+
 ### Tuning
 Each request is rejected with probability `max(0, (requests - k * accepts) / (requests + 1))` over the window. The `k`
 parameter (default `2.0`) tunes how aggressively load is shed: higher `k` sheds less, lower `k` sheds more. At `k = 1`
@@ -257,12 +262,23 @@ this is just the plain failure ratio, but `k = 1` is only marginally stable and 
 after the backend recovers; `k > 1` guarantees the controller fully reopens once the backend is healthy and adds a dead
 zone so transient failures don't trigger shedding. Configure `k` and the sliding window via `AdmissionController.Config`.
 
-### Behavior
-These charts drive the controller through a simulated backend (see [`charts`](charts)). Under overload it sheds the
-excess so the client allowed rate holds near `k * capacity` and the backend actual rate (goodput) stays near capacity,
-and on recovery the rejection probability returns to zero.
+The same constant-overload run at three values of `k` shows the trade-off: the admitted (client allowed) plateau lands
+around `k * capacity`, so higher `k` admits more while lower `k` sheds harder. At `k = 1` the loop is only marginally
+stable and under-utilizes the backend; `k = 2` keeps goodput at capacity with headroom to keep probing.
+
+`k = 1` (plain failure ratio - jittery, under-utilizes):
+
+![steady-overload-k1](docs/images/admission-controller/steady-overload-k1.png)
+
+`k = 1.5` (middle ground):
+
+![steady-overload-k1.5](docs/images/admission-controller/steady-overload-k1.5.png)
+
+`k = 2` (default - goodput at capacity, smooth):
 
 ![steady-overload](docs/images/admission-controller/steady-overload.png)
+
+Shedding and full reopen on recovery (`k = 2`):
 
 ![drop-then-recover](docs/images/admission-controller/drop-then-recover.png)
 
