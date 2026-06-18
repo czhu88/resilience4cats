@@ -282,6 +282,11 @@ Shedding and full reopen on recovery (`k = 2`):
 
 ![drop-then-recover](docs/images/admission-controller/drop-then-recover.png)
 
+With `k = 1`, the gate is slow to reopen: after capacity is restored the rejection probability lingers instead of
+snapping back to zero (the marginal-stability latching that motivates the `k > 1` default):
+
+![drop-then-recover-k1](docs/images/admission-controller/drop-then-recover-k1.png)
+
 ## Circuit-Breaker
 The `circuit-breaker` models a concurrent state machine used to provide stability and prevent cascading failures in
 distributed systems. 

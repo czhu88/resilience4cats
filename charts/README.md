@@ -205,3 +205,10 @@ cases, while goodput stays near capacity.
 reopens once capacity is restored.
 
 ![drop-then-recover-k1.5](../docs/images/admission-controller/drop-then-recover-k1.5.png)
+
+#### drop-then-recover-k1
+`k = 1` over the recovery profile lays bare the marginal stability: after capacity is restored the rejection
+probability lingers high and only drifts back to zero slowly, instead of snapping back the way `k = 2` does. This is the
+concrete reason the default is `k > 1`.
+
+![drop-then-recover-k1](../docs/images/admission-controller/drop-then-recover-k1.png)

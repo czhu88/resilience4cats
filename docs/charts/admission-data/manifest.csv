@@ -6,3 +6,4 @@ slow-degradation,Capacity steps down gradually; the rejection probability steps 
 steady-overload-k1,"k=1 (the plain failure ratio): admitted collapses to around capacity with no wasted backend work, but the loop is only marginally stable - the rate is jittery and often under-utilizes the backend.",steady-overload-k1-samples.csv
 steady-overload-k1.5,"k=1.5: a middle ground - the admitted plateau settles around 1.5x capacity, between the k=1 and k=2 cases.",steady-overload-k1.5-samples.csv
 drop-then-recover-k1.5,"k=1.5: a lower admitted plateau than k=2 while overloaded, and the gate still fully reopens on recovery.",drop-then-recover-k1.5-samples.csv
+drop-then-recover-k1,"k=1 (the plain failure ratio): only marginally stable, the rejection probability lingers after capacity is restored instead of snapping back to zero - the gate is slow to reopen.",drop-then-recover-k1-samples.csv

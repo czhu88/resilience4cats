@@ -134,6 +134,15 @@ object AdmissionScenario {
       config = BaseConfig.copy(k = 1.5)
     )
 
+  private val dropThenRecoverK1: AdmissionScenario =
+    dropThenRecover.copy(
+      name = "drop-then-recover-k1",
+      description =
+        "k=1 (the plain failure ratio): only marginally stable, the rejection probability lingers after capacity is " +
+          "restored instead of snapping back to zero - the gate is slow to reopen.",
+      config = BaseConfig.copy(k = 1.0)
+    )
+
   val all: List[AdmissionScenario] = List(
     steadyOverload,
     capacityDrop,
@@ -141,6 +150,7 @@ object AdmissionScenario {
     slowDegradation,
     steadyOverloadK1,
     steadyOverloadK15,
-    dropThenRecoverK15
+    dropThenRecoverK15,
+    dropThenRecoverK1
   )
 }
