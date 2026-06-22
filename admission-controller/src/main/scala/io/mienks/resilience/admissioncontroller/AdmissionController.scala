@@ -145,7 +145,7 @@ object AdmissionController {
       .of(RecordingAdmissionController.State.empty)
       .map(state => new RecordingAdmissionController[F](canAllow = canAllow, state = state))
 
-  private[admissioncontroller] def rejectionProbability(snapshot: Snapshot, k: Double): Double =
+  private[admissioncontroller] def rejectionProbability(k: Double)(snapshot: Snapshot): Double =
     if (!snapshot.isInitialized) 0.0
     else {
       val accepts = snapshot.totalMeasurements - snapshot.totalFailures
@@ -161,16 +161,17 @@ object AdmissionController {
       k: Double
   ) extends AdmissionController[F] {
 
+    private val rejectProbability = AdmissionController.rejectionProbability(k = k)(_)
+
     override def allow: F[Boolean] =
       measurements.peek.flatMap { snapshot =>
-        val probability = AdmissionController.rejectionProbability(snapshot = snapshot, k = k)
-        random.nextDouble.map(_ >= probability)
+        random.nextDouble.map(_ >= rejectProbability(snapshot))
       }
 
     override def record(isFailure: Boolean): F[Snapshot] =
       measurements.record(isFailure = isFailure)
 
     override def rejectionProbability: F[Double] =
-      measurements.peek.map(snapshot => AdmissionController.rejectionProbability(snapshot = snapshot, k = k))
+      measurements.peek.map(rejectProbability)
   }
 }

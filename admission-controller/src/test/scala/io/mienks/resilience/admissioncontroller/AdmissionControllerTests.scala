@@ -12,19 +12,19 @@ class AdmissionControllerTests extends CatsEffectSuite {
   test("rejectionProbability is zero until the measurement window is initialized") {
     val snapshot = Snapshot(totalMeasurements = 1, totalFailures = 1, isInitialized = false)
 
-    IO(assertEquals(AdmissionController.rejectionProbability(snapshot = snapshot, k = 2.0), 0.0))
+    IO(assertEquals(AdmissionController.rejectionProbability(k = 2.0)(snapshot = snapshot), 0.0))
   }
 
   test("rejectionProbability follows proportional shedding math") {
     val snapshot = Snapshot(totalMeasurements = 10, totalFailures = 5, isInitialized = true)
 
-    IO(assertEquals(AdmissionController.rejectionProbability(snapshot = snapshot, k = 1.5), 2.5 / 11.0))
+    IO(assertEquals(AdmissionController.rejectionProbability(k = 1.5)(snapshot = snapshot), 2.5 / 11.0))
   }
 
   test("rejectionProbability is zero when requests are within the accepted request budget") {
     val snapshot = Snapshot(totalMeasurements = 10, totalFailures = 1, isInitialized = true)
 
-    IO(assertEquals(AdmissionController.rejectionProbability(snapshot = snapshot, k = 2.0), 0.0))
+    IO(assertEquals(AdmissionController.rejectionProbability(k = 2.0)(snapshot = snapshot), 0.0))
   }
 
   test("allow permits traffic before the window is initialized") {
