@@ -18,7 +18,7 @@ class RecordingAdmissionController[F[_]: Sync] private[admissioncontroller] (
     state.modify(_.record(isFailure = isFailure))
 
   override def rejectionProbability: F[Double] =
-    state.get.map(s => AdmissionController.rejectionProbability(snapshot = s.snapshot, k = 2.0))
+    state.get.map(s => AdmissionController.rejectionProbability(k = 2.0)(snapshot = s.snapshot))
 
   override def failureRatio: F[Double] =
     state.get.map(_.snapshot.failureRate.getOrElse(0.0))
