@@ -12,6 +12,7 @@ the Scala side requires no changes here.
 
 import argparse
 import csv
+import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -40,6 +41,20 @@ def load_samples(path):
         rejection.append(float(row["rejection_probability"]))
         failure.append(float(row["failure_ratio"]))
     return elapsed, offered, admitted, accepted, capacity, rejection, failure
+
+
+def wrap_to_axes(ax, text, fontsize):
+    """Wrap text so its rendered width matches the axes width (not the full figure)."""
+    fig = ax.figure
+    fig.canvas.draw()  # realize a renderer so we can measure text/axes extents
+    renderer = fig.canvas.get_renderer()
+    axes_width = ax.get_window_extent(renderer=renderer).width
+    sample = "the quick brown fox jumps over the lazy dog"
+    probe = ax.text(0.0, 0.0, sample, fontsize=fontsize, transform=ax.transAxes)
+    char_width = probe.get_window_extent(renderer=renderer).width / len(sample)
+    probe.remove()
+    max_chars = max(20, int(axes_width / char_width))
+    return textwrap.fill(text, width=max_chars)
 
 
 def render_scenario(entry, data_dir, out_dir):
@@ -87,7 +102,10 @@ def render_scenario(entry, data_dir, out_dir):
     )
 
     fig.suptitle(entry["scenario"], fontsize=14, fontweight="bold")
-    ax_rate.set_title(entry["description"], fontsize=10, color="#555555", pad=30)
+    description = wrap_to_axes(ax_rate, entry["description"], fontsize=10)
+    # Lift the title clear of the legend row, with extra room per wrapped line.
+    title_pad = 30 + 13 * description.count("\n")
+    ax_rate.set_title(description, fontsize=10, color="#555555", pad=title_pad)
     fig.tight_layout()
 
     out_path = out_dir / f"{entry['scenario']}.png"
