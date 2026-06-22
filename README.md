@@ -253,7 +253,9 @@ AdmissionController[IO]().flatMap { controller =>
 ### Behavior
 These charts drive the controller through a simulated backend (see [`charts`](charts)). Under overload it sheds the
 excess so the client allowed rate holds near `k * capacity` and the backend actual rate (goodput) stays near capacity,
-and on recovery the rejection probability returns to zero.
+and on recovery the rejection probability returns to zero. On the right axis the dotted **failure ratio** keeps rising
+with throttling while the **rejection probability** stays at zero inside the dead zone — the gap between them is the
+dead zone.
 
 ### Tuning
 Each request is rejected with probability `max(0, (requests - k * accepts) / (requests + 1))` over the window. The `k`

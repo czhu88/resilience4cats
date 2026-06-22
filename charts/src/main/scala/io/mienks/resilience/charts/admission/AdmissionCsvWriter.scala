@@ -19,7 +19,7 @@ final case class AdmissionManifestEntry(
 object AdmissionCsvWriter {
 
   private val SamplesHeader: String =
-    "elapsed_ms,offered_rps,admitted_rps,accepted_rps,capacity_rps,rejection_probability"
+    "elapsed_ms,offered_rps,admitted_rps,accepted_rps,capacity_rps,rejection_probability,failure_ratio"
   private val ManifestHeader: String = "scenario,description,samples_file"
 
   /** Write `<scenario>-samples.csv` into `dataDir`, returning the manifest entry. */
@@ -33,7 +33,8 @@ object AdmissionCsvWriter {
           s"${sample.admittedRps.toString}," +
           s"${sample.acceptedRps.toString}," +
           s"${sample.capacityRps.toString}," +
-          sample.rejectionProbability.toString
+          s"${sample.rejectionProbability.toString}," +
+          sample.failureRatio.toString
       }).mkString("\n")
 
     writeFile(dataDir.resolve(samplesFile), samplesContent).as(

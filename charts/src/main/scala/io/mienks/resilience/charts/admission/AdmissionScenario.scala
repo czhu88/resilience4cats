@@ -94,16 +94,24 @@ object AdmissionScenario {
       )
     )
 
+  // Four overload levels chosen relative to the offered load (~710 rps, see AdmissionSimulation) so the steady-state
+  // failure rate (1 - capacity/offered, while not shedding) lands at roughly 0.24, 0.41, 0.61, 0.75. With k=2 the dead
+  // zone is a 50% failure rate, so the first two levels are tolerated (no shedding) and the last two cross it. The
+  // 0.41 level sits between k=1.5's dead zone (~33%) and k=2's (50%), so it sheds at k=1.5 but not at k=2.
   private val slowDegradation: AdmissionScenario =
     AdmissionScenario(
       name = "slow-degradation",
-      description = "Capacity steps down gradually; the rejection probability steps up to match each lower ceiling.",
+      description =
+        "Capacity steps through four overload levels. The two milder levels keep the failure rate inside k=2's 50% " +
+          "dead zone, so the controller tolerates the throttling without shedding; the two harsher levels cross it " +
+          "and the rejection probability steps up.",
       config = BaseConfig,
       phases = NonEmptyList.of(
         Backend.Phase(hardCeiling = Healthy, softCeilings = Nil, duration = Warmup + 1.second),
-        Backend.Phase(hardCeiling = rps(280), softCeilings = Nil, duration = 3.seconds),
-        Backend.Phase(hardCeiling = rps(180), softCeilings = Nil, duration = 3.seconds),
-        Backend.Phase(hardCeiling = rps(110), softCeilings = Nil, duration = 3.seconds)
+        Backend.Phase(hardCeiling = rps(540), softCeilings = Nil, duration = 2500.millis), // ~0.24 failure rate
+        Backend.Phase(hardCeiling = rps(420), softCeilings = Nil, duration = 2500.millis), // ~0.41 failure rate
+        Backend.Phase(hardCeiling = rps(280), softCeilings = Nil, duration = 2500.millis), // ~0.61 failure rate
+        Backend.Phase(hardCeiling = rps(180), softCeilings = Nil, duration = 2500.millis)  // ~0.75 failure rate
       )
     )
 
@@ -143,6 +151,15 @@ object AdmissionScenario {
       config = BaseConfig.copy(k = 1.0)
     )
 
+  private val slowDegradationK15: AdmissionScenario =
+    slowDegradation.copy(
+      name = "slow-degradation-k1.5",
+      description =
+        "The same four-level capacity staircase at k=1.5, whose dead zone shrinks to a ~33% failure rate: the " +
+          "controller starts shedding one level earlier than k=2 - on the second (milder) step it tolerated before.",
+      config = BaseConfig.copy(k = 1.5)
+    )
+
   val all: List[AdmissionScenario] = List(
     steadyOverload,
     capacityDrop,
@@ -151,6 +168,7 @@ object AdmissionScenario {
     steadyOverloadK1,
     steadyOverloadK15,
     dropThenRecoverK15,
-    dropThenRecoverK1
+    dropThenRecoverK1,
+    slowDegradationK15
   )
 }

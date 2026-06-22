@@ -13,4 +13,6 @@ class NoopAdmissionController[F[_]: Applicative] extends AdmissionController[F] 
     Snapshot(totalMeasurements = 0, totalFailures = 0, isInitialized = false).pure[F]
 
   override def rejectionProbability: F[Double] = 0.0.pure[F]
+
+  override def failureRatio: F[Double] = 0.0.pure[F]
 }

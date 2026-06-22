@@ -30,7 +30,7 @@ def read_rows(path):
 
 
 def load_samples(path):
-    elapsed, offered, admitted, accepted, capacity, rejection = [], [], [], [], [], []
+    elapsed, offered, admitted, accepted, capacity, rejection, failure = [], [], [], [], [], [], []
     for row in read_rows(path):
         elapsed.append(float(row["elapsed_ms"]) / 1000.0)  # seconds
         offered.append(float(row["offered_rps"]))
@@ -38,11 +38,12 @@ def load_samples(path):
         accepted.append(float(row["accepted_rps"]))
         capacity.append(float(row["capacity_rps"]))
         rejection.append(float(row["rejection_probability"]))
-    return elapsed, offered, admitted, accepted, capacity, rejection
+        failure.append(float(row["failure_ratio"]))
+    return elapsed, offered, admitted, accepted, capacity, rejection, failure
 
 
 def render_scenario(entry, data_dir, out_dir):
-    elapsed, offered, admitted, accepted, capacity, rejection = load_samples(data_dir / entry["samples_file"])
+    elapsed, offered, admitted, accepted, capacity, rejection, failure = load_samples(data_dir / entry["samples_file"])
 
     fig, ax_rate = plt.subplots(figsize=(11, 5))
 
@@ -66,15 +67,20 @@ def render_scenario(entry, data_dir, out_dir):
     ax_rate.set_ylim(bottom=0)
     ax_rate.grid(True, alpha=0.3)
 
-    # Right axis: the controller's rejection probability in [0, 1].
+    # Right axis: the controller's failure ratio and rejection probability in [0, 1]. The failure ratio keeps rising
+    # with throttling; the rejection probability stays clamped at zero inside the dead zone and only lifts off once the
+    # failure ratio crosses 1 - 1/k. The gap between the two lines is the dead zone.
     ax_prob = ax_rate.twinx()
+    failure_line, = ax_prob.plot(
+        elapsed, failure, color="#8e44ad", linewidth=1.0, alpha=0.6, linestyle=":", label="failure ratio"
+    )
     rejection_line, = ax_prob.plot(
         elapsed, rejection, color="#c0392b", linewidth=1.5, alpha=0.85, label="rejection probability"
     )
-    ax_prob.set_ylabel("rejection probability")
+    ax_prob.set_ylabel("failure ratio / rejection probability")
     ax_prob.set_ylim(-0.02, 1.02)
 
-    handles = [admitted_line, accepted_line, offered_line, capacity_line, rejection_line]
+    handles = [admitted_line, accepted_line, offered_line, capacity_line, failure_line, rejection_line]
     # Legend in a single horizontal row above the plot so it never covers the curves.
     ax_rate.legend(
         handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.02), ncol=len(handles), frameon=False, fontsize=9

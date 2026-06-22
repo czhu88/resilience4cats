@@ -157,7 +157,9 @@ well above the degraded capacities, then schedules capacity over time via `Backe
 
 Each chart plots, on the left axis, the **client input rate** (load before the gate), the **client allowed rate**
 (what the controller admits), the **backend actual rate** (goodput, allowed minus throttled), and the **backend
-capacity** (dashed); on the right axis the controller's **rejection probability** in `[0, 1]`.
+capacity** (dashed); on the right axis the controller's **failure ratio** (dotted, unclamped) and **rejection
+probability** in `[0, 1]`. The failure ratio keeps rising with throttling while the rejection probability stays pinned
+at zero inside the dead zone — the gap between the two lines is the dead zone.
 
 ### steady-overload
 Constant capacity below offered load: the controller sheds the excess, holding admitted near `k*capacity` and goodput
@@ -177,7 +179,10 @@ guarantees the gate fully reopens).
 ![drop-then-recover](../docs/images/admission-controller/drop-then-recover.png)
 
 ### slow-degradation
-Capacity steps down gradually; the rejection probability steps up to match each lower ceiling.
+Capacity steps through four overload levels. The two milder levels keep the failure rate inside `k = 2`'s 50% dead
+zone, so the controller tolerates the throttling (you can see the backend throttling — the gap to capacity — but the
+rejection probability stays at zero and nothing is shed); the two harsher levels cross the dead zone and the rejection
+probability steps up.
 
 ![slow-degradation](../docs/images/admission-controller/slow-degradation.png)
 
@@ -212,3 +217,10 @@ probability lingers high and only drifts back to zero slowly, instead of snappin
 concrete reason the default is `k > 1`.
 
 ![drop-then-recover-k1](../docs/images/admission-controller/drop-then-recover-k1.png)
+
+#### slow-degradation-k1.5
+The same four-level staircase as [slow-degradation](#slow-degradation), but at `k = 1.5` the dead zone shrinks from a
+50% failure rate to ~33%. The second (milder) level — tolerated with no shedding at `k = 2` — now crosses the dead zone,
+so the controller begins shedding one step earlier. A direct, visual read of how `k` sets the tolerance threshold.
+
+![slow-degradation-k1.5](../docs/images/admission-controller/slow-degradation-k1.5.png)

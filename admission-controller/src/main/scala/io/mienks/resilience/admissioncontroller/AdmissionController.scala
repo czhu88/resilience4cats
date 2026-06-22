@@ -34,6 +34,12 @@ trait AdmissionController[F[_]] {
   def record(isFailure: Boolean): F[Snapshot]
 
   def rejectionProbability: F[Double]
+
+  /** The current failure ratio over the measurement window in `[0, 1]`, or `0.0` before the window is initialized.
+    * Unlike [[rejectionProbability]] this is not clamped by the dead zone, so it keeps rising even while the controller
+    * is still admitting everything.
+    */
+  def failureRatio: F[Double]
 }
 
 object AdmissionController {
@@ -173,5 +179,8 @@ object AdmissionController {
 
     override def rejectionProbability: F[Double] =
       measurements.peek.map(rejectProbability)
+
+    override def failureRatio: F[Double] =
+      measurements.peek.map(_.failureRate.getOrElse(0.0))
   }
 }

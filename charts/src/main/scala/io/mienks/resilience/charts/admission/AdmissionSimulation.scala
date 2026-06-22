@@ -41,9 +41,14 @@ object AdmissionSimulation {
 
         takeSample =
           for {
-            probability <- controller.rejectionProbability
-            capacity    <- backend.baseCapacity
-            _           <- recorder.recordSample(capacityRps = toRps(capacity), rejectionProbability = probability)
+            probability  <- controller.rejectionProbability
+            failureRatio <- controller.failureRatio
+            capacity     <- backend.baseCapacity
+            _            <- recorder.recordSample(
+              capacityRps = toRps(capacity),
+              rejectionProbability = probability,
+              failureRatio = failureRatio
+            )
           } yield ()
 
         _ <- offerCall.foreverM.background
@@ -76,7 +81,7 @@ object AdmissionSimulation {
     val countAccepted: IO[Unit] = acceptedRef.update(_ + 1L)
 
     /** Append a sample, deriving each throughput from the counter delta since the previous sample. */
-    def recordSample(capacityRps: Double, rejectionProbability: Double): IO[Unit] =
+    def recordSample(capacityRps: Double, rejectionProbability: Double, failureRatio: Double): IO[Unit] =
       for {
         now      <- IO.monotonic
         offered  <- offeredRef.get
@@ -93,7 +98,8 @@ object AdmissionSimulation {
             admittedRps = perSecond(admitted, prev.admitted),
             acceptedRps = perSecond(accepted, prev.accepted),
             capacityRps = capacityRps,
-            rejectionProbability = rejectionProbability
+            rejectionProbability = rejectionProbability,
+            failureRatio = failureRatio
           )
         )
       } yield ()
@@ -136,6 +142,8 @@ object AdmissionSimulation {
     *   the backend's current hard-ceiling capacity (the bottleneck)
     * @param rejectionProbability
     *   the controller's current shedding probability in `[0, 1]`
+    * @param failureRatio
+    *   the controller's windowed failure ratio in `[0, 1]` (unclamped by the dead zone, unlike rejectionProbability)
     */
   final case class Sample(
       elapsedMillis: Long,
@@ -143,7 +151,8 @@ object AdmissionSimulation {
       admittedRps: Double,
       acceptedRps: Double,
       capacityRps: Double,
-      rejectionProbability: Double
+      rejectionProbability: Double,
+      failureRatio: Double
   )
 
   /** Everything a chart needs for one scenario: the dense sampled timeseries. */
