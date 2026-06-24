@@ -13,7 +13,17 @@ ThisBuild / developers   := List(
 ThisBuild / description := "Resilience structures not included in Cats Effect standard library, such as `CircuitBreaker` and `RateLimiter`."
 
 lazy val root = (project in file("."))
-  .aggregate(core, circuitBreaker, benchmarks, rateLimiter, tokenBucket, adaptiveRateLimiter, charts, resilience4cats)
+  .aggregate(
+    core,
+    circuitBreaker,
+    benchmarks,
+    rateLimiter,
+    tokenBucket,
+    adaptiveRateLimiter,
+    admissionController,
+    charts,
+    resilience4cats
+  )
   .settings(
     name            := "resilience4cats-root",
     publishArtifact := false,
@@ -96,19 +106,35 @@ lazy val adaptiveRateLimiter = project
   )
   .dependsOn(rateLimiter)
 
-// Non-published module that drives the AdaptiveRateLimiter through scripted scenarios and emits CSV timeseries
-// for the matplotlib charts under charts/scripts/render.py.
+lazy val admissionController = project
+  .in(file("admission-controller"))
+  .settings(
+    name := "admission-controller",
+    libraryDependencies ++= Seq(
+      "org.typelevel" %% "cats-effect"         % CatsEffectVersion,
+      "org.typelevel" %% "munit-cats-effect"   % MunitCatsEffectVersion % Test,
+      "org.typelevel" %% "cats-effect-testkit" % CatsEffectVersion      % Test
+    ),
+    testFrameworks += new TestFramework("munit.Framework")
+  )
+  .dependsOn(core)
+
+// Non-published module that drives the AdaptiveRateLimiter and AdmissionController through scripted scenarios and
+// emits CSV timeseries for the matplotlib charts under charts/scripts/. `charts/run` defaults to the
+// AdaptiveRateLimiter pipeline (GenerateCharts); the AdmissionController pipeline runs via
+// `charts/runMain io.mienks.resilience.charts.GenerateAdmissionCharts`.
 lazy val charts = project
   .in(file("charts"))
   .settings(
-    name           := "charts",
-    publish / skip := true,
+    name                := "charts",
+    publish / skip      := true,
+    Compile / mainClass := Some("io.mienks.resilience.charts.GenerateCharts"),
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect" % CatsEffectVersion,
       "co.fs2"        %% "fs2-core"    % Fs2Version
     )
   )
-  .dependsOn(adaptiveRateLimiter)
+  .dependsOn(adaptiveRateLimiter, admissionController)
 
 lazy val tokenBucket = project
   .in(file("token-bucket"))

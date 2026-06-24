@@ -1,8 +1,16 @@
 # Charts
 
-Behavior charts for the [`adaptive-rate-limiter`](../adaptive-rate-limiter). This module runs the limiter through a
-set of closed-loop scenarios against a *simulated* backend, exports the resulting timeseries as CSV, and renders them
-to PNG with matplotlib. The images are what you see embedded in the project documentation.
+Behavior charts for the [`adaptive-rate-limiter`](../adaptive-rate-limiter) and the
+[`admission-controller`](../admission-controller). This module runs each structure through a set of closed-loop
+scenarios against a *simulated* backend, exports the resulting timeseries as CSV, and renders them to PNG with
+matplotlib. The images are what you see embedded in the project documentation.
+
+There are two independent pipelines that share the same simulated [`Backend`](src/main/scala/io/mienks/resilience/charts/Backend.scala)
+but write to separate data and image directories so they live side by side:
+
+- **AdaptiveRateLimiter** (`charts/run` -> `docs/charts/data/`, rendered by `render.py`). Documented below.
+- **AdmissionController** (`charts/runMain ...GenerateAdmissionCharts` -> `docs/charts/admission-data/`, rendered by
+  `render_admission.py`). See [AdmissionController charts](#admissioncontroller-charts).
 
 This is a documentation/tooling module only — it is not published (`publish / skip := true`).
 
@@ -123,3 +131,96 @@ Capacity steps down gradually; the limiter re-discovers a lower safe rate at eac
 A two-tier backend (soft + hard ceiling) produces two distinct failure levels across the hysteresis bands.
 
 ![graded-degradation](../docs/images/adaptive-rate-limiter/graded-degradation.png)
+
+## AdmissionController charts
+
+The [`admission-controller`](../admission-controller) charts tell a different story than the rate limiter. Instead of
+discovering and tracking a *rate*, the controller probabilistically sheds load so the backend's accepted goodput stays
+near its capacity. Under overload it keeps the admitted load near `k * capacity` (with the SRE default `k = 2.0`),
+holding a smooth plateau rather than the AIMD sawtooth, and on recovery the rejection probability returns to zero
+because `k > 1` guarantees the gate fully reopens.
+
+### Generate and render
+
+```bash
+sbt "charts/runMain io.mienks.resilience.charts.GenerateAdmissionCharts"   # -> docs/charts/admission-data/
+python charts/scripts/render_admission.py                                  # -> docs/images/admission-controller/
+```
+
+The Scala app writes `<scenario>-samples.csv` (`elapsed_ms`, `offered_rps`, `admitted_rps`, `accepted_rps`,
+`capacity_rps`, `rejection_probability`) and a `manifest.csv`. There is no events file — the controller has no
+discrete state transitions to mark. `render_admission.py` is data-driven the same way `render.py` is.
+
+The same simulated backend is reused: any call admitted *above* the hard ceiling is "throttled" (a failure), which is
+exactly the downstream-overload signal the controller sheds against. Each scenario holds the offered load constant and
+well above the degraded capacities, then schedules capacity over time via `Backend.Phase`.
+
+Each chart plots, on the left axis, the **client input rate** (load before the gate), the **client allowed rate**
+(what the controller admits), the **backend actual rate** (goodput, allowed minus throttled), and the **backend
+capacity** (dashed); on the right axis the controller's **failure ratio** (dotted, unclamped) and **rejection
+probability** in `[0, 1]`. The failure ratio keeps rising with throttling while the rejection probability stays pinned
+at zero inside the dead zone — the gap between the two lines is the dead zone.
+
+### steady-overload
+Constant capacity below offered load: the controller sheds the excess, holding admitted near `k*capacity` and goodput
+near capacity — a smooth plateau, no sawtooth.
+
+![steady-overload](../docs/images/admission-controller/steady-overload.png)
+
+### capacity-drop
+A sudden capacity drop pushes the rejection probability from zero up to a steady shedding level.
+
+![capacity-drop](../docs/images/admission-controller/capacity-drop.png)
+
+### drop-then-recover
+After a capacity collapse and shedding, restored capacity drives the rejection probability back to zero (`k > 1`
+guarantees the gate fully reopens).
+
+![drop-then-recover](../docs/images/admission-controller/drop-then-recover.png)
+
+### slow-degradation
+Capacity steps through four overload levels. The two milder levels keep the failure rate inside `k = 2`'s 50% dead
+zone, so the controller tolerates the throttling (you can see the backend throttling — the gap to capacity — but the
+rejection probability stays at zero and nothing is shed); the two harsher levels cross the dead zone and the rejection
+probability steps up.
+
+![slow-degradation](../docs/images/admission-controller/slow-degradation.png)
+
+### Comparing `k`
+
+The `k` parameter sets how aggressively the controller sheds. These runs hold the same capacity profile fixed and vary
+only `k`, so the effect is isolated. The admitted plateau lands around `k * capacity`: higher `k` admits more (and
+tolerates more backend-side throttling) while lower `k` sheds harder. Compare against the default `k = 2.0`
+[steady-overload](#steady-overload) and [drop-then-recover](#drop-then-recover) above.
+
+#### steady-overload-k1
+`k = 1` is the plain failure ratio. Admitted collapses to around capacity with no wasted backend work, but the loop is
+only marginally stable: the rate is jittery and often dips below capacity, under-utilizing the backend.
+
+![steady-overload-k1](../docs/images/admission-controller/steady-overload-k1.png)
+
+#### steady-overload-k1.5
+`k = 1.5` is the middle ground: the admitted plateau settles around `1.5 * capacity`, between the `k = 1` and `k = 2`
+cases, while goodput stays near capacity.
+
+![steady-overload-k1.5](../docs/images/admission-controller/steady-overload-k1.5.png)
+
+#### drop-then-recover-k1.5
+`k = 1.5` over the recovery profile: a lower admitted plateau than `k = 2` while overloaded, and the gate still fully
+reopens once capacity is restored.
+
+![drop-then-recover-k1.5](../docs/images/admission-controller/drop-then-recover-k1.5.png)
+
+#### drop-then-recover-k1
+`k = 1` over the recovery profile lays bare the marginal stability: after capacity is restored the rejection
+probability lingers high and only drifts back to zero slowly, instead of snapping back the way `k = 2` does. This is the
+concrete reason the default is `k > 1`.
+
+![drop-then-recover-k1](../docs/images/admission-controller/drop-then-recover-k1.png)
+
+#### slow-degradation-k1.5
+The same four-level staircase as [slow-degradation](#slow-degradation), but at `k = 1.5` the dead zone shrinks from a
+50% failure rate to ~33%. The second (milder) level — tolerated with no shedding at `k = 2` — now crosses the dead zone,
+so the controller begins shedding one step earlier. A direct, visual read of how `k` sets the tolerance threshold.
+
+![slow-degradation-k1.5](../docs/images/admission-controller/slow-degradation-k1.5.png)

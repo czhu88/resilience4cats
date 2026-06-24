@@ -198,6 +198,52 @@ class TimeBasedSlidingWindowMeasurementsTests extends CatsEffectSuite {
     }
   }
 
+  test("peek returns the current snapshot without recording a measurement") {
+    val minNumberOfCalls                                           = 2
+    def snap(totalMeasurements: Int, totalFailures: Int): Snapshot =
+      doSnap(minNumberOfCalls)(totalMeasurements, totalFailures)
+    TestControl.executeEmbed {
+      for {
+        measurements <- TimeBasedSlidingWindowMeasurements[IO](
+          numberOfBuckets = 3,
+          bucketSize = 1.second,
+          minNumberOfCalls = minNumberOfCalls
+        )
+        empty <- measurements.peek
+        _ = assertEquals(empty, snap(totalMeasurements = 0, totalFailures = 0))
+        recorded <- measurements.record(isFailure = true)
+        _ = assertEquals(recorded, snap(totalMeasurements = 1, totalFailures = 1))
+        peeked1 <- measurements.peek
+        peeked2 <- measurements.peek
+        _ = assertEquals(peeked1, snap(totalMeasurements = 1, totalFailures = 1))
+        _ = assertEquals(peeked2, snap(totalMeasurements = 1, totalFailures = 1))
+        next <- measurements.record(isFailure = false)
+        _ = assertEquals(next, snap(totalMeasurements = 2, totalFailures = 1))
+      } yield ()
+    }
+  }
+
+  test("peek expires stale time buckets without adding a measurement") {
+    val minNumberOfCalls                                           = 1
+    def snap(totalMeasurements: Int, totalFailures: Int): Snapshot =
+      doSnap(minNumberOfCalls)(totalMeasurements, totalFailures)
+    TestControl.executeEmbed {
+      for {
+        measurements <- TimeBasedSlidingWindowMeasurements[IO](
+          numberOfBuckets = 3,
+          bucketSize = 1.second,
+          minNumberOfCalls = minNumberOfCalls
+        )
+        _       <- measurements.record(isFailure = true)
+        _       <- IO.sleep(4.seconds)
+        expired <- measurements.peek
+        _ = assertEquals(expired, snap(totalMeasurements = 0, totalFailures = 0))
+        next <- measurements.record(isFailure = false)
+        _ = assertEquals(next, snap(totalMeasurements = 1, totalFailures = 0))
+      } yield ()
+    }
+  }
+
   test("recordings after reset produce correct snapshots") {
     val minNumberOfCalls                                           = 1
     def snap(totalMeasurements: Int, totalFailures: Int): Snapshot =

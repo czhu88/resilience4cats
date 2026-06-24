@@ -138,6 +138,25 @@ class CountBasedSlidingWindowMeasurementsTests extends CatsEffectSuite {
     } yield ()
   }
 
+  test("peek returns the current snapshot without recording a measurement") {
+    val minNumberOfCalls                                           = 2
+    def snap(totalMeasurements: Int, totalFailures: Int): Snapshot =
+      doSnap(minNumberOfCalls)(totalMeasurements, totalFailures)
+    for {
+      measurements <- CountBasedSlidingWindowMeasurements[IO](windowSize = 3, minNumberOfCalls = minNumberOfCalls)
+      empty        <- measurements.peek
+      _ = assertEquals(empty, snap(totalMeasurements = 0, totalFailures = 0))
+      recorded <- measurements.record(isFailure = true)
+      _ = assertEquals(recorded, snap(totalMeasurements = 1, totalFailures = 1))
+      peeked1 <- measurements.peek
+      peeked2 <- measurements.peek
+      _ = assertEquals(peeked1, snap(totalMeasurements = 1, totalFailures = 1))
+      _ = assertEquals(peeked2, snap(totalMeasurements = 1, totalFailures = 1))
+      next <- measurements.record(isFailure = false)
+      _ = assertEquals(next, snap(totalMeasurements = 2, totalFailures = 1))
+    } yield ()
+  }
+
   test("recordings after reset produce correct snapshots") {
     val minNumberOfCalls                                           = 1
     def snap(totalMeasurements: Int, totalFailures: Int): Snapshot =
