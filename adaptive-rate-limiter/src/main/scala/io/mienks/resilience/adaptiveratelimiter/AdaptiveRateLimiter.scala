@@ -223,8 +223,8 @@ object AdaptiveRateLimiter {
     * @param onRateChange
     *   callback fired whenever the AIMD updates its estimated rate for the protected sink
     * @param onError
-    *   callback fired when the AIMD control loop stream encounters an error; the stream restarts
-    *   automatically after invoking this callback
+    *   callback fired when the AIMD control loop stream encounters an error; the stream restarts automatically after
+    *   invoking this callback
     */
   def start[F[_]: Async](
       config: Config,
@@ -456,7 +456,8 @@ object AdaptiveRateLimiter {
           case (rate, Right(_)) =>
             rate
           case (rate, Left(Tick)) =>
-            Either.catchOnly[IllegalArgumentException]((rate + rateIncreaseBy.rate).min(maxRate))
+            Either
+              .catchOnly[IllegalArgumentException]((rate + rateIncreaseBy.rate).min(maxRate))
               .getOrElse((rate.normalizedTo(rateIncreaseBy.rate.period) + rateIncreaseBy.rate).min(maxRate))
         }
         .changes

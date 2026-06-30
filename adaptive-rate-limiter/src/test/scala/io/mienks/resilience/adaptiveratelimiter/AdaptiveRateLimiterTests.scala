@@ -294,7 +294,7 @@ class AdaptiveRateLimiterTests extends CatsEffectSuite {
     for {
       errors    <- Ref[IO].of(List.empty[Throwable])
       callCount <- Ref[IO].of(0)
-      _ <- AdaptiveRateLimiter
+      _         <- AdaptiveRateLimiter
         .start[IO](
           config = BaseConfig,
           onFailureCategoryChange = (_: FailureGradient) =>
